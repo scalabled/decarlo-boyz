@@ -73,14 +73,21 @@ const SURFACE_SCORE = {
   water: -1,
 };
 
-/** Body height the enclosure probes fire from, metres above the ground. */
-const EYE_PROBE_Y = 1.0;
-/** A hit above this is a ceiling. Tall enough to clear every bridge deck. */
-const ROOF_PROBE = 14;
-/** How far a sideways probe looks for a wall. A room; not a wide hall. */
-const WALL_PROBE = 6;
-/** Of eight bearings, this many blocked means walls rather than a canopy. */
-const ENCLOSED_SIDES = 6;
+/**
+ * ANKLE height, not eye height, and that choice is the fix. A stair riser, a
+ * kerb and a low wall are all invisible to a ray at 1.0 m and all of them stop
+ * a man walking. Just under `STANCE.stand.stepHeight` so anything the body can
+ * simply walk over does not register as an obstacle.
+ */
+const ANKLE_PROBE_Y = 0.40;
+/** How far a bearing must be clear to count as a way out. */
+const ESCAPE_REACH = 2.0;
+/** How far out the ground is sampled to see whether the next step is climbable. */
+const STEP_SAMPLE = 1.2;
+/** `STANCE.stand.stepHeight` in src/player/tuning.js. Above this he cannot climb. */
+const MAX_STEP_UP = 0.42;
+/** Walkable bearings out of eight required for a spawn to be usable. */
+const MIN_ESCAPE = 5;
 /** Height the ground query drops from when vetting a candidate point. */
 const GROUND_FROM = 200;
 
@@ -95,6 +102,8 @@ export class Director {
     this._lane = { x: 0, y: 0, z: 0 };
     this._best = { x: 0, z: 0, yaw: 0, score: 0 };
     this._pose = { x: 0, y: null, z: 0, yaw: 0, score: 0 };
+    /** Seconds left to wait for streaming before the post-spawn unstick check. */
+    this._unstickT = 0;
   }
 
   init(save) {
@@ -164,45 +173,124 @@ export class Director {
    */
 
   /**
-   * Is a point INSIDE something? A surface query cannot tell you: the floor of
-   * a boathouse is `sidewalk`, so a point in the middle of it scores 4 — the
-   * best mark available — and the player materialises indoors with no way out.
-   * Carson did exactly that, measured at 16 of 16 horizontal rays blocked and a
-   * roof 0 m overhead, on a point `_score` called perfect.
+   * CAN HE WALK OUT OF HERE? Not "is the ground good", which is all `_score`
+   * used to ask, and not "is he indoors", which was the first answer to this
+   * and was too narrow.
    *
-   * `physics.checkCapsule` does not catch it either. It answers "may a capsule
-   * move here", not "is this point already in solid", and it returned CLEAR for
-   * that spawn while rays from the same origin hit at 0.0 m.
+   * Two spawns proved the point, and they fail differently:
    *
-   * So ask the collision world directly, in two stages, because this runs
-   * inside a 160-point spiral and rays are not free:
+   *   Carson, in his own boathouse. `surfaceAt` says `sidewalk`, which scores 4
+   *   — the best mark available — because the floor of a building IS pavement;
+   *   it just has a building on it. Measured 16 of 16 rays blocked, roof 0 m up.
+   *   `physics.checkCapsule` called it CLEAR, because it answers "may a capsule
+   *   move here", not "is this point already inside solid".
    *
-   *   1. one ray UP. Nothing over your head, nothing to worry about — this is
-   *      the overwhelmingly common case and it costs a single cast.
-   *   2. only if something IS overhead, eight rays out. A bridge deck, a canopy
-   *      or a gantry leaves the sides open and is a fine place to stand; a room
-   *      does not. That distinction is the whole reason for the second stage —
-   *      rejecting everything with a roof would rule out every underpass in a
-   *      city built on forty bridges.
+   *   Dylan, on the Mt. Washington steps. No roof at all, so a test that keys
+   *   on a ceiling never fires. He was wedged in an open staircase: 5 of 8
+   *   bearings blocked at ankle height, and the ground 1.2 m out stepping UP by
+   *   0.76, 0.93 and 0.94 m. `STANCE.stand.stepHeight` is 0.42 m — those risers
+   *   are more than double what he can climb, so six of eight headings moved
+   *   him 0.00 m.
+   *
+   * So the question is escape, and it is asked at ANKLE height, because that is
+   * where a riser or a kerb lives. A bearing counts as walkable when nothing
+   * blocks it within `ESCAPE_REACH` and the ground that far out is within one
+   * step. Fewer than `MIN_ESCAPE` of eight and this is somewhere to be stuck.
+   *
+   * Measured separation on the shipped map: trapped scored 3 walkable bearings,
+   * every good spawn scored 8. The threshold sits in a wide empty gap, which is
+   * the only kind of threshold worth having.
+   *
+   * A big DROP is not a reject. Downhill is where the road is, and half the
+   * good spawns on the incline have a retaining wall falling away on two
+   * bearings.
    */
-  _enclosed(x, z, y) {
+  _trapped(x, z, y) {
     const ph = this.ctx.peek('physics');
     if (typeof ph?.raycast !== 'function') return false;
     // MASK.WORLD is static geometry and props ONLY. Unmasked, these rays also
-    // hit actors and vehicles, so a bus stopped at the kerb or a pedestrian
-    // walking past would read as a wall and this would reject a perfectly good
-    // pavement — intermittently, depending on traffic.
+    // hit actors and vehicles — and the player's own capsule, at distance 0 —
+    // so a bus at the kerb or a pedestrian walking past would read as a wall
+    // and this would reject good pavement, intermittently, depending on traffic.
     const mask = ph.MASK?.WORLD;
-    const H = y + EYE_PROBE_Y;
-    const up = ph.raycast({ x, y: H, z }, { x: 0, y: 1, z: 0 }, ROOF_PROBE, mask);
-    if (!up?.hit) return false;
-    let blocked = 0;
+    const H = y + ANKLE_PROBE_Y;
+    let open = 0;
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      const h = ph.raycast({ x, y: H, z }, { x: Math.cos(a), y: 0, z: Math.sin(a) }, WALL_PROBE, mask);
-      if (h?.hit && h.distance < WALL_PROBE) blocked++;
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      const hit = ph.raycast({ x, y: H, z }, { x: dx, y: 0, z: dz }, ESCAPE_REACH, mask);
+      if (hit?.hit) continue;
+      const gy = ph.groundHeight?.(x + dx * STEP_SAMPLE, z + dz * STEP_SAMPLE, GROUND_FROM, mask);
+      if (Number.isFinite(gy) && gy - y > MAX_STEP_UP) continue;
+      open++;
+      if (open >= MIN_ESCAPE) return false;   // enough ways out; stop casting
     }
-    return blocked >= ENCLOSED_SIDES;
+    return open < MIN_ESCAPE;
+  }
+
+  /**
+   * Re-check where the player ACTUALLY ended up, once the city around him
+   * exists, and move him if he cannot walk out.
+   *
+   * This is not belt-and-braces; without it the vetting above is close to a
+   * no-op at the moment it runs. Static collision streams in around the player,
+   * so when `spawnFor` vets a point on the far side of the map there is nothing
+   * there to hit yet — every ray misses, `_trapped` says "fine", and the check
+   * passes on an empty world. Measured: probing Dylan's Mt. Washington spawn
+   * from across the city reports 0 of 16 bearings blocked; standing there and
+   * probing reports 10, and he cannot move on six of eight headings.
+   *
+   * It is the same trap as a beauty shot posed against a collision world that
+   * had not streamed yet, and the same answer: wait for `world.streamingIdle()`
+   * and ask again.
+   *
+   * Returns true if it moved him.
+   */
+  /** Ask for an unstick check on the frames after a placement. */
+  armUnstick(seconds = 6) {
+    this._unstickT = seconds;
+  }
+
+  /**
+   * Drive the deferred check. Returns true once it has settled the question,
+   * so the caller can stop asking.
+   */
+  tickUnstick(dt) {
+    if (!(this._unstickT > 0)) return true;
+    this._unstickT -= dt;
+    const w = this.ctx.peek('world');
+    if (!w?.streamingIdle?.()) return this._unstickT <= 0;
+    this.unstick();
+    this._unstickT = 0;
+    return true;
+  }
+
+  unstick(maxRadius = 30) {
+    const w = this.ctx.peek('world');
+    const pl = this.ctx.peek('player');
+    if (!w?.streamingIdle?.() || !pl) return false;
+    const f = pl.feetPosition ?? pl.position;
+    if (!f || !Number.isFinite(f.x)) return false;
+    if (!this._trapped(f.x, f.z, f.y)) return false;
+
+    // Deterministic rings, nearest first — the first point he can walk out of
+    // wins, so he moves the shortest distance that solves it.
+    for (let ring = 1; ring <= 5; ring++) {
+      const r = (maxRadius / 5) * ring;
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2 + ring * 0.27;
+        const x = f.x + Math.cos(a) * r;
+        const z = f.z + Math.sin(a) * r;
+        if (this._score(x, z) < 3) continue;          // _score runs _trapped too
+        const y = this.ctx.peek('physics')?.groundHeight?.(x, z, GROUND_FROM, this.ctx.peek('physics')?.MASK?.WORLD);
+        if (!Number.isFinite(y)) continue;
+        pl.teleport?.({ x, y, z }, pl.yaw ?? 0);
+        console.info(`[director] unstuck from ${f.x.toFixed(0)},${f.z.toFixed(0)} to ${x.toFixed(0)},${z.toFixed(0)}`);
+        return true;
+      }
+    }
+    return false;
   }
 
   /** How good is this ground to stand on? Higher is better; < 1 is a reject. */
@@ -213,10 +301,10 @@ export class Director {
     const s = typeof w.surfaceAt === 'function' ? w.surfaceAt(x, z) : 'asphalt';
     const base = SURFACE_SCORE[s] ?? 2;
     if (base < 1) return base;
-    // Indoors is a reject on the same footing as water: both are places the
-    // player cannot walk out of, and both used to score as ground.
+    // Nowhere to walk is a reject on the same footing as water: both are places
+    // the player cannot leave, and both used to score as perfectly good ground.
     const y = this.ctx.peek('physics')?.groundHeight?.(x, z, GROUND_FROM);
-    if (Number.isFinite(y) && this._enclosed(x, z, y)) return -1;
+    if (Number.isFinite(y) && this._trapped(x, z, y)) return -1;
     return base;
   }
 

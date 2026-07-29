@@ -280,6 +280,8 @@ export class GameSystem {
     /* ---- open the world -------------------------------------------------- */
 
     this.director.openWorld(this.save);
+    // The opening spawn gets the same post-streaming re-check as every other.
+    this.director.armUnstick?.(10);
     this.characters.restore(this.characters.activeId);
     this.freeroam.seedPackages();
     if (this.save.waypoint) {
@@ -617,6 +619,7 @@ export class GameSystem {
     // wasted player straight back into the Monongahela.
     const spot = this.director.groundPose(sh.x, sh.z);
     this.wq.placePlayer(spot.x, spot.z, spot.yaw, spot.y ?? null);
+    this.director.armUnstick?.();
     if (p?.health) {
       p.health.reset(false);
       p.health.value = Math.max(p.health.value, (p.health.max ?? 100) * 0.55);
@@ -657,6 +660,9 @@ export class GameSystem {
 
   _update(dt, ctx) {
     this._playtime += dt;
+    // A spawn is only verifiable once the city around it has streamed in — see
+    // `Director.unstick`. Cheap: a no-op the moment it has settled.
+    this.director?.tickUnstick?.(dt);
     this.save.totals.playtime = Math.round(this._playtime);
     if (this._deathCd > 0) this._deathCd -= dt;
     if (this._clearBoarding > 0 && (this._clearBoarding -= dt) <= 0) this._boarding = false;

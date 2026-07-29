@@ -96,6 +96,10 @@ export class Characters {
     // ---- where he is -----------------------------------------------------
     const spot = this.director.spawnFor(id, c);
     this.wq.placePlayer(spot.x, spot.z, spot.yaw, spot.y ?? null);
+    // Vetting a point on the far side of the map happens against collision that
+    // has not streamed yet, so it can only be trusted once he is standing on
+    // it. `GameSystem` re-checks for a few seconds; see `Director.unstick`.
+    this.director.armUnstick?.();
 
     // ---- HUD -------------------------------------------------------------
     const ui = this.wq.ui;

@@ -68,16 +68,26 @@ const sample = (label) =>
       // the player's own capsule at distance 0, and the probe reports the whole
       // city as indoors — which it did on the first run of this check.
       const mask = ph.MASK?.WORLD;
-      const H = pos.y + 1.0;
+      // ANKLE height. At 1.0 m this check passed a spawn wedged in an open
+      // staircase on Mt. Washington, because a stair riser is below the ray. A
+      // riser, a kerb and a low wall all stop a man and all are invisible up
+      // there. 0.40 m is just under the 0.42 m the body can step over.
+      const H = pos.y + 0.40;
       for (let i = 0; i < 16; i++) {
         const a = (i / 16) * Math.PI * 2;
-        const h = ph.raycast({ x: pos.x, y: H, z: pos.z }, { x: Math.cos(a), y: 0, z: Math.sin(a) }, 8, mask);
+        const dx = Math.cos(a), dz = Math.sin(a);
+        const h = ph.raycast({ x: pos.x, y: H, z: pos.z }, { x: dx, y: 0, z: dz }, 8, mask);
         if (h?.hit) {
-          if (h.distance < 6) blocked++;
+          if (h.distance < 2) blocked++;
           if (h.distance < nearest) nearest = h.distance;
+          continue;
         }
+        // Nothing in the way, but is the next step climbable? The staircase
+        // that trapped Dylan stepped UP 0.76-0.94 m against a 0.42 m limit.
+        const gy = ph.groundHeight?.(pos.x + dx * 1.2, pos.z + dz * 1.2, 200, mask);
+        if (Number.isFinite(gy) && gy - pos.y > 0.42) blocked++;
       }
-      const up = ph.raycast({ x: pos.x, y: H, z: pos.z }, { x: 0, y: 1, z: 0 }, 20, mask);
+      const up = ph.raycast({ x: pos.x, y: pos.y + 1.0, z: pos.z }, { x: 0, y: 1, z: 0 }, 20, mask);
       roof = up?.hit ? +up.distance.toFixed(1) : null;
     }
     return {
@@ -95,12 +105,17 @@ const sample = (label) =>
 
 const rows = [];
 /**
- * Walls on nearly every bearing AND something overhead is a room. Either alone
- * is not: a bridge deck or a canopy roofs you with the sides wide open, and a
- * kerbside spawn has a wall behind it and open street in front. Steel City has
- * forty bridges, so rejecting everything with a roof would reject half the map.
+ * NOWHERE TO WALK. Of sixteen bearings at ankle height, how many are a wall or
+ * a step too tall to climb? This does not care about a roof, and that is the
+ * point: the first version of this check required one, so it passed Carson in
+ * a boathouse (it had a roof, so it caught him) and then failed to catch Dylan
+ * wedged in an OPEN staircase, which has none.
+ *
+ * Measured on the shipped map: the trapped spawn had 10 of 16 bearings blocked
+ * and moved 0.00 m on six of eight walk headings; every good spawn had 0 or 1.
+ * The threshold sits in that gap rather than near either side of it.
  */
-const enclosed = (s) => s.roof !== null && s.blocked >= 13;
+const enclosed = (s) => s.blocked >= 8;
 
 const check = (s) => {
   const ok = !s.water && !BAD.has(s.surface) && s.roadDist != null && s.roadDist < 60 && !enclosed(s);
@@ -119,6 +134,20 @@ try {
     await pump(60);
     check(await sample(`boot ${run + 1}`));
 
+    /*
+     * There is deliberately NO check of the raw spawn point here.
+     *
+     * It was tried and removed. Static collision streams in around the player,
+     * so probing a pose on the far side of the map casts rays through an empty
+     * world: every one misses, every point looks perfect, and the check passes
+     * on a build with the vetting switched off. Measured — Dylan's Mt.
+     * Washington spawn reads 0 of 16 bearings blocked from across the city and
+     * 10 of 16 while standing on it.
+     *
+     * A spawn can only be judged from where it is. `src/game/unstickprobe.mjs`
+     * does that: it switches brother for real, waits for `world.streamingIdle`,
+     * then tries to walk out.
+     */
     // Each brother, at his own routine hour, on the first run only — twelve
     // full boots plus nine switches is enough signal without a ten-minute run.
     if (run === 0) {
@@ -202,7 +231,8 @@ try {
   if (bad.length) {
     console.log(`\nBAD SPAWNS:\n  ` + bad.map((r) =>
       `${r.label}: ${r.surface}${r.water ? ' (IN WATER)' : ''}` +
-      `${enclosed(r) ? ` (INDOORS — ${r.blocked}/16 rays blocked, roof ${r.roof} m)` : ''}`
+      `${enclosed(r) ? ` (NO WAY OUT — ${r.blocked}/16 bearings blocked at ankle height` +
+        `${r.roof !== null ? `, roof ${r.roof} m` : ''})` : ''}`
     ).join('\n  '));
   }
   if (errs.length) console.log(`\nconsole errors:\n  ` + [...new Set(errs)].slice(0, 5).join('\n  '));
