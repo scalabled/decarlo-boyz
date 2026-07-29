@@ -53,10 +53,40 @@ const sample = (label) =>
     const surface = w?.surfaceAt?.(pos.x, pos.z) ?? null;
     const water = w?.isWater?.(pos.x, pos.z) ?? false;
     const road = w?.roads?.nearestEdge?.(pos.x, pos.z, 300);
+
+    // ENCLOSURE — measured against the COLLISION WORLD, not against `world`.
+    // Every check above this line asks `surfaceAt`, which is the same question
+    // `Director._score` asks, so all of them agreed that the floor of Carson's
+    // boathouse was a fine place to start: it IS a sidewalk, it just has a
+    // building on it. He spawned inside, 16 of 16 rays blocked, roof 0 m up,
+    // and this probe was green. Rays through the static BVH are an independent
+    // answer, which is the whole point (ARCHITECTURE rule 12).
+    const ph = e.ctx.peek('physics');
+    let blocked = 0, roof = null, nearest = 99;
+    if (typeof ph?.raycast === 'function') {
+      // STATIC ONLY. Unmasked, the first thing every one of these rays hits is
+      // the player's own capsule at distance 0, and the probe reports the whole
+      // city as indoors — which it did on the first run of this check.
+      const mask = ph.MASK?.WORLD;
+      const H = pos.y + 1.0;
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const h = ph.raycast({ x: pos.x, y: H, z: pos.z }, { x: Math.cos(a), y: 0, z: Math.sin(a) }, 8, mask);
+        if (h?.hit) {
+          if (h.distance < 6) blocked++;
+          if (h.distance < nearest) nearest = h.distance;
+        }
+      }
+      const up = ph.raycast({ x: pos.x, y: H, z: pos.z }, { x: 0, y: 1, z: 0 }, 20, mask);
+      roof = up?.hit ? +up.distance.toFixed(1) : null;
+    }
     return {
       label: l,
       surface,
       water,
+      blocked,
+      roof,
+      nearest: nearest === 99 ? null : +nearest.toFixed(1),
       roadDist: road?.edge ? +road.dist.toFixed(1) : null,
       pos: [+pos.x.toFixed(1), +pos.y.toFixed(1), +pos.z.toFixed(1)],
       character: g?.character ?? null,
@@ -64,8 +94,16 @@ const sample = (label) =>
   }, label);
 
 const rows = [];
+/**
+ * Walls on nearly every bearing AND something overhead is a room. Either alone
+ * is not: a bridge deck or a canopy roofs you with the sides wide open, and a
+ * kerbside spawn has a wall behind it and open street in front. Steel City has
+ * forty bridges, so rejecting everything with a roof would reject half the map.
+ */
+const enclosed = (s) => s.roof !== null && s.blocked >= 13;
+
 const check = (s) => {
-  const ok = !s.water && !BAD.has(s.surface) && s.roadDist != null && s.roadDist < 60;
+  const ok = !s.water && !BAD.has(s.surface) && s.roadDist != null && s.roadDist < 60 && !enclosed(s);
   rows.push({ ...s, ok });
   return ok;
 };
@@ -162,7 +200,10 @@ try {
   }
   console.log(`\n${rows.length - bad.length}/${rows.length} spawns on solid, road-connected ground`);
   if (bad.length) {
-    console.log(`\nBAD SPAWNS:\n  ` + bad.map((r) => `${r.label}: ${r.surface}${r.water ? ' (IN WATER)' : ''}`).join('\n  '));
+    console.log(`\nBAD SPAWNS:\n  ` + bad.map((r) =>
+      `${r.label}: ${r.surface}${r.water ? ' (IN WATER)' : ''}` +
+      `${enclosed(r) ? ` (INDOORS — ${r.blocked}/16 rays blocked, roof ${r.roof} m)` : ''}`
+    ).join('\n  '));
   }
   if (errs.length) console.log(`\nconsole errors:\n  ` + [...new Set(errs)].slice(0, 5).join('\n  '));
   process.exitCode = bad.length ? 1 : 0;

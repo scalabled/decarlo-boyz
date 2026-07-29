@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { COMMON } from './glsl.js';
-import { Pass, hdrTarget } from './pass.js';
+import { Pass, hdrTarget, floatType } from './pass.js';
 
 /**
  * Physical exposure.
@@ -235,7 +235,7 @@ void main() {
 `;
 
 export class AutoExposure {
-  constructor() {
+  constructor(renderer) {
     this.logPass = new Pass('ow-loglum', LOGLUM, {
       tSrc: { value: null },
       tDepth: { value: null },
@@ -350,7 +350,9 @@ export class AutoExposure {
       uTrust: { value: new THREE.Vector2(0.10, 0.30) },
     });
 
-    const o = { type: THREE.FloatType, format: THREE.RGBAFormat, name: 'exposure' };
+    // Half where full float is not RENDERABLE — see `floatType` in pass.js.
+    // Getting this wrong costs the whole image, not just the meter.
+    const o = { type: floatType(renderer), format: THREE.RGBAFormat, name: 'exposure' };
     this.rt64 = hdrTarget(64, 64, o);
     this.rt16 = hdrTarget(16, 16, o);
     this.rt4 = hdrTarget(4, 4, o);

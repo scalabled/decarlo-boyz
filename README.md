@@ -1,6 +1,6 @@
 # DECARLO BOYZ — Steel City
 
-> Created by @mrinreality1
+> **[▶ Play it](https://scalabled.github.io/decarlo-boyz/)** — runs in the browser, no install. Desktop recommended; mobile will chug.
 
 An open-world third-person action game in the browser. Three.js r180 + WebGL2.
 

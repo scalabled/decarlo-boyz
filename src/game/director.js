@@ -73,6 +73,17 @@ const SURFACE_SCORE = {
   water: -1,
 };
 
+/** Body height the enclosure probes fire from, metres above the ground. */
+const EYE_PROBE_Y = 1.0;
+/** A hit above this is a ceiling. Tall enough to clear every bridge deck. */
+const ROOF_PROBE = 14;
+/** How far a sideways probe looks for a wall. A room; not a wide hall. */
+const WALL_PROBE = 6;
+/** Of eight bearings, this many blocked means walls rather than a canopy. */
+const ENCLOSED_SIDES = 6;
+/** Height the ground query drops from when vetting a candidate point. */
+const GROUND_FROM = 200;
+
 export class Director {
   constructor(ctx, wq) {
     this.ctx = ctx;
@@ -152,13 +163,61 @@ export class Director {
    * than the first attempt.
    */
 
+  /**
+   * Is a point INSIDE something? A surface query cannot tell you: the floor of
+   * a boathouse is `sidewalk`, so a point in the middle of it scores 4 — the
+   * best mark available — and the player materialises indoors with no way out.
+   * Carson did exactly that, measured at 16 of 16 horizontal rays blocked and a
+   * roof 0 m overhead, on a point `_score` called perfect.
+   *
+   * `physics.checkCapsule` does not catch it either. It answers "may a capsule
+   * move here", not "is this point already in solid", and it returned CLEAR for
+   * that spawn while rays from the same origin hit at 0.0 m.
+   *
+   * So ask the collision world directly, in two stages, because this runs
+   * inside a 160-point spiral and rays are not free:
+   *
+   *   1. one ray UP. Nothing over your head, nothing to worry about — this is
+   *      the overwhelmingly common case and it costs a single cast.
+   *   2. only if something IS overhead, eight rays out. A bridge deck, a canopy
+   *      or a gantry leaves the sides open and is a fine place to stand; a room
+   *      does not. That distinction is the whole reason for the second stage —
+   *      rejecting everything with a roof would rule out every underpass in a
+   *      city built on forty bridges.
+   */
+  _enclosed(x, z, y) {
+    const ph = this.ctx.peek('physics');
+    if (typeof ph?.raycast !== 'function') return false;
+    // MASK.WORLD is static geometry and props ONLY. Unmasked, these rays also
+    // hit actors and vehicles, so a bus stopped at the kerb or a pedestrian
+    // walking past would read as a wall and this would reject a perfectly good
+    // pavement — intermittently, depending on traffic.
+    const mask = ph.MASK?.WORLD;
+    const H = y + EYE_PROBE_Y;
+    const up = ph.raycast({ x, y: H, z }, { x: 0, y: 1, z: 0 }, ROOF_PROBE, mask);
+    if (!up?.hit) return false;
+    let blocked = 0;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const h = ph.raycast({ x, y: H, z }, { x: Math.cos(a), y: 0, z: Math.sin(a) }, WALL_PROBE, mask);
+      if (h?.hit && h.distance < WALL_PROBE) blocked++;
+    }
+    return blocked >= ENCLOSED_SIDES;
+  }
+
   /** How good is this ground to stand on? Higher is better; < 1 is a reject. */
   _score(x, z) {
     const w = this.ctx.peek('world');
     if (!w) return 3;
     if (typeof w.isWater === 'function' && w.isWater(x, z)) return -1;
     const s = typeof w.surfaceAt === 'function' ? w.surfaceAt(x, z) : 'asphalt';
-    return SURFACE_SCORE[s] ?? 2;
+    const base = SURFACE_SCORE[s] ?? 2;
+    if (base < 1) return base;
+    // Indoors is a reject on the same footing as water: both are places the
+    // player cannot walk out of, and both used to score as ground.
+    const y = this.ctx.peek('physics')?.groundHeight?.(x, z, GROUND_FROM);
+    if (Number.isFinite(y) && this._enclosed(x, z, y)) return -1;
+    return base;
   }
 
   /**

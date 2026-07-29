@@ -103,6 +103,50 @@ export function floatDepth(w, h, name = 'depth') {
   return t;
 }
 
+/**
+ * Can this device RENDER INTO a 32-bit float target, as opposed to merely
+ * sampling one?
+ *
+ * The two are different capabilities and WebGL2 grants the first only with
+ * `EXT_color_buffer_float`. Desktop has it universally; a great many mobile
+ * GPUs do not, offering `EXT_color_buffer_half_float` instead.
+ *
+ * This mattered because nothing checked. The auto-exposure chain allocated
+ * five `FloatType` targets and rendered into them, and on a device without the
+ * extension those framebuffers are simply incomplete — the 1x1 exposure texture
+ * reads back as ZERO, `composite.js` multiplies the entire scene by it, and the
+ * game boots to a black screen with working controls and a working HUD. It was
+ * reported as "too dark to see anything", and it survived teleporting and
+ * switching brother because it was never about the place.
+ *
+ * Half-float is ample for everything here: an EV100 sits in single digits and
+ * the exposure scalar in the low hundreds, against a half-float range of
+ * +-65504. Precision, not range, is what we give up, and the meter averages
+ * over a 64x64 pyramid where it does not show.
+ *
+ * Cached per renderer — `extensions.has` is a live GL query and this is called
+ * per target.
+ */
+const _floatRT = new WeakMap();
+export function canRenderFloat(renderer) {
+  if (!renderer) return false;
+  let v = _floatRT.get(renderer);
+  if (v === undefined) {
+    v = !!renderer.extensions?.has?.('EXT_color_buffer_float');
+    _floatRT.set(renderer, v);
+    if (!v) console.info('[render] no EXT_color_buffer_float — float targets fall back to half');
+  }
+  return v;
+}
+
+/**
+ * The widest float type this device can actually render into.
+ * Pass it wherever `THREE.FloatType` was about to be hard-coded.
+ */
+export function floatType(renderer) {
+  return canRenderFloat(renderer) ? THREE.FloatType : THREE.HalfFloatType;
+}
+
 /** Half-float colour target with sane defaults for HDR post. */
 export function hdrTarget(w, h, opts = {}) {
   const { floatDepth: wantFloatDepth, ...rest } = opts;

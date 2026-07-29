@@ -26,6 +26,7 @@ uniform vec2 uTexel;
 uniform vec2 uResolution;
 uniform vec4 uLens;      // x chromatic, y vignette, z grainAmount, w time
 uniform vec4 uGrade;     // x bloomStrength, y lutStrength, z sharpen, w lutSize
+uniform float uFallbackExp; // exposure to use when the meter reads invalid
 uniform vec4 uLook;      // x agx slope, y agx power, z agx sat, w exposureBias
 uniform vec2 uBloomCa;   // x lateral dispersion, y chroma boost
 uniform float uBloomCap; // ceiling on the lift the pyramid may add to a pixel
@@ -39,7 +40,22 @@ vec3 sampleLut( vec3 c ) {
 }
 
 void main() {
-  float exposure = texture2D( tExposure, vec2( 0.5 ) ).r * uLook.w;
+  // The meter is a 1x1 target the GPU wrote. If that write never landed the
+  // read is 0 and this multiply takes the ENTIRE image to black — which is
+  // exactly how the game shipped on mobile GPUs that cannot render to a 32-bit
+  // float target: controls alive, HUD alive, world invisible. floatType() in
+  // pass.js stops the target being unrenderable; this stops a black frame ever
+  // being the failure mode again, whatever the cause.
+  //
+  // The floor is far below any exposure the meter produces in play (night
+  // locks around 0.35), so it never clamps a real reading — it only catches
+  // zero, and NaN, which fails the comparison and takes the same branch.
+  // uFallbackExp is a CPU-side estimate from the sun angle we are standing in.
+  // A hard-coded 1.0 here was itself about three stops under a daylight street,
+  // so the rescue looked like a different bug rather than none.
+  float metered = texture2D( tExposure, vec2( 0.5 ) ).r;
+  if ( !( metered > 0.0025 ) ) metered = uFallbackExp;
+  float exposure = metered * uLook.w;
 
   vec2 d = vUv - 0.5;
   float r2 = dot( d, d );
@@ -394,6 +410,13 @@ export function createComposite(lut) {
     // Together with a contrast pivot below mid-grey it is what put 18% scene
     // grey on code value 153.
     uLook: { value: new THREE.Vector4(1.0, 1.0, 1.08, 1) },
+    /**
+     * What the meter WOULD have said, from the sun angle alone. Consumed only
+     * when the metered texture reads back invalid. `RenderSystem` refreshes it
+     * every frame; the 3.0 here is a daylight value so that a frame rendered
+     * before the first update is exposed rather than black.
+     */
+    uFallbackExp: { value: 3.0 },
     // Bloom dispersion (radial, in uv at r^1) and chroma boost. See the note
     // where the bloom is added: this is what stops a night street of sodium
     // lamps blooming into one grey-white smear.

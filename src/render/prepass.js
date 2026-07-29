@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { COMMON } from './glsl.js';
-import { floatDepth } from './pass.js';
+import { floatDepth, floatType } from './pass.js';
 
 /**
  * Depth / normal / velocity prepass.
@@ -47,7 +47,14 @@ function opaqueTexel() {
 }
 
 export class GBuffer {
-  constructor() {
+  constructor(renderer) {
+    /**
+     * The linear-depth channel below is a float target. Where full float is not
+     * RENDERABLE — most mobile GPUs — it has to be half, or the whole gbuffer
+     * framebuffer is incomplete. Half-float depth costs precision at range; an
+     * incomplete gbuffer costs the frame.
+     */
+    this._floatType = floatType(renderer);
     this.rt = null;
     this.width = 1;
     this.height = 1;
@@ -274,7 +281,7 @@ export class GBuffer {
     rt.textures[1].name = 'gb-velocity';
 
     rt.textures[2].format = THREE.RedFormat;
-    rt.textures[2].type = THREE.FloatType;
+    rt.textures[2].type = this._floatType;
     rt.textures[2].name = 'gb-depth';
 
     for (const t of rt.textures) {

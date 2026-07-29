@@ -131,6 +131,14 @@ const REF_DAYLIGHT = 4.6;
  *   userData.owMatId     = 0..1   written to the gbuffer alpha for custom fx
  * Transparent materials are excluded from the prepass and shadows automatically.
  */
+/**
+ * Exposure to fall back on when the metered value is unusable. Measured on the
+ * shipped build: a daylight street meters 3.16 and night locks near 0.35, so
+ * these are the two ends of the real range rather than invented numbers.
+ */
+const FALLBACK_DAY = 3.1;
+const FALLBACK_NIGHT = 0.4;
+
 export class RenderSystem {
   static id = 'render';
   static deps = [];
@@ -190,6 +198,42 @@ export class RenderSystem {
     }
     /** True when EXT_clip_control was actually there and reversed-Z is live. */
     this.reversedZ = renderer.capabilities.reversedDepthBuffer === true;
+
+    /**
+     * One line naming what this GPU can and cannot do, logged at boot.
+     *
+     * It exists because a device-specific rendering fault is otherwise
+     * undiagnosable from a bug report: "the lighting was too dark" on a phone
+     * could be the exposure meter, the HDR colour target, a shader that failed
+     * to compile or a quality tier, and none of them are distinguishable from
+     * the outside. Anyone who can reach a console can now paste one line and
+     * settle it. `__GPU__` holds the same record for a probe to read.
+     */
+    try {
+      const gl = renderer.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      this.gpu = {
+        renderer: String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown'),
+        floatRT: !!renderer.extensions?.has?.('EXT_color_buffer_float'),
+        floatBlend: !!renderer.extensions?.has?.('EXT_float_blend'),
+        floatLinear: !!renderer.extensions?.has?.('OES_texture_float_linear'),
+        // A fragment shader asking for highp on hardware that only offers
+        // mediump silently loses ~3 decimal digits, which HDR light values and
+        // a log-luminance meter both notice.
+        fragHighp: (gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)?.precision ?? 0) >= 23,
+        maxTexSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+        drawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS),
+        dpr: (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1),
+      };
+      if (typeof window !== 'undefined') window.__GPU__ = this.gpu;
+      const g = this.gpu;
+      console.info(
+        `[gpu] ${g.renderer} · floatRT ${g.floatRT} · fragHighp ${g.fragHighp} · ` +
+        `drawBuffers ${g.drawBuffers} · maxTex ${g.maxTexSize} · dpr ${g.dpr}`
+      );
+    } catch {
+      this.gpu = null;
+    }
     renderer.autoClear = false;
     renderer.autoClearColor = false;
     renderer.autoClearDepth = false;
@@ -235,7 +279,7 @@ export class RenderSystem {
       quality: this.qLevel,
     });
 
-    this.gbuffer = new GBuffer();
+    this.gbuffer = new GBuffer(renderer);
     this.gtao = q.gtao ? new Gtao() : null;
     this.contact = this.qLevel >= 1 ? new ContactShadows() : null;
     this.ssr = q.ssr ? new Ssr() : null;
@@ -248,7 +292,7 @@ export class RenderSystem {
     this.aerial = new AerialPerspective();
     this.aerial.enabled = !/[?&]owNoAerial=1/.test(location.search);
     this.culler = new SceneCuller();
-    this.exposure = new AutoExposure();
+    this.exposure = new AutoExposure(renderer);
     // Headroom for a physically-scaled sky (sunlit scenes reach ~5000 cd/m2).
     // The lower limit is the night exposure lock: a moonlit street meters at
     // EV100 -5.2, and letting the meter chase that turns night into an overcast
@@ -2869,6 +2913,14 @@ export class RenderSystem {
     cu.uLens.value.y = s.vignette + (s.adsVignette - s.vignette) * this._adsT;
     cu.uLens.value.w = ctx.time.elapsed;
     cu.uLook.value.w = this.ctx.config.exposure ?? 1;
+    // What the meter WOULD have said, from the sun angle alone. Only consumed
+    // when the metered texture reads back invalid — which is what a GPU that
+    // cannot render the float exposure target produces, and which used to take
+    // the whole image to black.
+    const alt = this.ctx.peek('sky')?.sunAltitude;
+    cu.uFallbackExp.value = Number.isFinite(alt)
+      ? FALLBACK_NIGHT + (FALLBACK_DAY - FALLBACK_NIGHT) * Math.min(1, Math.max(0, (alt + 0.10) / 0.45))
+      : FALLBACK_DAY;
 
     if (this.debugView) {
       this._renderDebug(renderer, color);
