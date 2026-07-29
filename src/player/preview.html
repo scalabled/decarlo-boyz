@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>player preview</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10131a; overflow: hidden; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      #hud {
+        position: fixed; left: 10px; top: 8px; color: #9fb4c8; z-index: 5;
+        font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: pre;
+        text-shadow: 0 1px 2px #000; pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="hud"></div>
+    <script type="module" src="./preview.js"></script>
+  </body>
+</html>

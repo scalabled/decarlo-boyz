@@ -1,0 +1,67 @@
+name: Deploy to GitHub Pages
+
+# The game is a static build — no server, no network calls, every asset
+# generated at runtime — so Pages can host the whole thing.
+
+on:
+  push:
+    branches: [main]
+  # Lets you re-deploy from the Actions tab without pushing.
+  workflow_dispatch:
+
+# One in-flight deploy at a time. `cancel-in-progress: false` so a queued deploy
+# finishes rather than being killed halfway through publishing an artifact —
+# a cancelled Pages deploy can leave the site serving a half-updated bundle.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `npm run build` is `lintticks && vite build`, so a rule-10 violation
+      # (a backtick inside a GLSL or CSS template literal) fails the deploy
+      # here rather than shipping a page that boots to a black screen.
+      - name: Build
+        env:
+          # Project sites live at /<repo>/. Derived from the repository name so
+          # a fork under a different name still resolves its assets.
+          OW_BASE: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      # Pages serves the built site verbatim and has no SPA fallback. This game
+      # is a single entry point with no client-side routing, so index.html is
+      # all that is needed — but a 404 copy costs nothing and stops a stray
+      # deep link rendering GitHub's own 404 page.
+      - name: Add 404 fallback
+        run: cp dist/index.html dist/404.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
