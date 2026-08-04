@@ -12,7 +12,9 @@ import { subdivide, resetLotIds } from './lots.js';
 import { RoadMeshBuilder, noGapFix } from './roadmesh.js';
 import { Water } from './water.js';
 import { buildBridges } from './bridges.js';
+import { buildAirfieldPaving, airfieldPavedAt, airfieldDeckAt } from './airfield.js';
 import { JobQueue, RingTracker } from './streaming.js';
+import { publishInclineTracks } from './incline.js';
 
 /** `?owNoWarmFix=1` reverts this subsystem's pre-warm to the pre-fix behaviour,
  *  so the two arms can be interleaved in one measurement session. */
@@ -358,6 +360,31 @@ export class WorldSystem {
       this._physDirty = true;
     }
 
+    /* ---- 5b. the two airfields: paving + collision, never streamed ------ */
+    // The graded bench went into the terrain inside `generateCity`
+    // (`netgen` step 0b); this is the emitted half — runway, taxiways, apron,
+    // markings, edge lamps, and an always-resident 'asphalt' collision sheet
+    // so a wheel or gear ray finds pavement wherever the aircraft is. See
+    // `src/world/airfield.js`; gated by `src/world/airsweep.mjs`.
+    this._airfields = [];
+    this._airfieldHandles = [];
+    for (const af of AIRFIELDS) {
+      const built = buildAirfieldPaving(af, {
+        terrain: this.terrain,
+        roads: this.roads,
+        mat: (k) => this.roadMesh._mat(k),
+      });
+      if (!built) continue;
+      this.root.add(built.group);
+      if (built.colMesh && physics) {
+        this.root.add(built.colMesh);
+        const h = physics.addStatic(built.colMesh, 'asphalt');
+        if (h >= 0) this._airfieldHandles.push(h);
+        this._physDirty = true;
+      }
+      this._airfields.push(built);
+    }
+
     /* ---- 6. the far road network, so the city reads to the horizon ----- */
     this._queueFarSectors();
 
@@ -390,6 +417,14 @@ export class WorldSystem {
      * every drivable corridor `landmarkClearance` metres outside it.
      */
     this.landmarks = LANDMARKS;
+    /**
+     * The incline's funicular track descriptor, solved once off the RAW
+     * terrain (same field `orientLandmarkSites` scored the bearing against)
+     * and published as `landmarks[].funicular.track`. `buildings` emits the
+     * trestle and rails from it; the `funicular` subsystem rides the cars on
+     * it. One authority — see `src/world/incline.js`.
+     */
+    publishInclineTracks(this.landmarks, (ix, iz) => this.terrain.heightAt(ix, iz));
     this.landmarkClearance = LANDMARK_RESERVE;
     this.districts = DISTRICTS;
     this.rivers = RIVERS;
@@ -948,7 +983,19 @@ export class WorldSystem {
           const xx = cx - TCOL_HALF + i * TCOL_STEP;
           const k = (j * n + i) * 3;
           arr[k] = xx;
-          arr[k + 1] = t.heightAt(xx, zz) - 0.06;
+          let yy = t.heightAt(xx, zz) - 0.06;
+          /**
+           * On airfield pavement the patch rides just under the DECK, not
+           * under the bench. An aircraft's contact rays cast from the contact
+           * point itself; a competing collider 0.12 m below the deck catches
+           * the ray of a gear leg pressed under the pavement and the machine
+           * comes to rest wheels-deep in the runway (measured — see
+           * `airfieldDeckAt`). 2 cm below the deck keeps this sheet the
+           * loser against the real paving everywhere a query starts above it.
+           */
+          const deck = airfieldDeckAt(xx, zz);
+          if (deck !== null && yy < deck - 0.02) yy = deck - 0.02;
+          arr[k + 1] = yy;
           arr[k + 2] = zz;
         }
       }
@@ -1209,6 +1256,9 @@ export class WorldSystem {
       // Past the footway of a bridge is the parapet, not a riverbank.
       if (e.bridge && ne.dist <= e.width) return 'sidewalk';
     }
+    // Airfield pavement: runway, taxiways, apron. Checked after roads so a
+    // street crossing the strip keeps its own surface at the crossing.
+    if (airfieldPavedAt(x, z)) return 'asphalt';
     if (this.isWater(x, z)) return 'water';
     const wd = this.terrain.waterDist(x, z);
     if (wd < 26) return 'sand';
@@ -1270,16 +1320,21 @@ export class WorldSystem {
    */
   walkableHeightAt(x, z, y = NaN) {
     const t = this.terrain.heightAt(x, z);
+    // Airfield pavement: the deck is the surface you stand on, `LIFT` above
+    // the bench (see `airfieldDeckAt` for the burial this closes). A road
+    // corridor crossing the strip still wins below — the crossing is the
+    // road's ground, and both sit on the same bench.
+    const deck = airfieldDeckAt(x, z);
     const ne = this.roads.nearestEdge(x, z, 40, y);
     const e = ne.edge;
-    if (!e || e.rail) return t;
+    if (!e || e.rail) return deck ?? t;
     const hw = roadHalfWidth(e.kind, e.lanes);
     const k = ROAD_KIND[e.kind] ?? ROAD_KIND.street;
     const sw = e.bridge ? Math.max(k.sidewalk, 1.0) : k.sidewalk;
-    if (ne.dist > hw + 0.33 + sw) return t;
+    if (ne.dist > hw + 0.33 + sw) return deck ?? t;
     // A deck overhead is not the floor. With a `y` the query already rejected
     // it; without one, anything far off the ground is a flyover.
-    if (!Number.isFinite(y) && Math.abs(ne.y - t) > 2.5) return t;
+    if (!Number.isFinite(y) && Math.abs(ne.y - t) > 2.5) return deck ?? t;
     if (ne.dist <= hw) {
       const u = ne.dist / hw;
       return ne.y + hw * 0.021 * (1 - u * u);
@@ -1481,6 +1536,7 @@ export class WorldSystem {
       'drain', 'cover', 'ballast', 'rail_steel', 'sleeper',
       'terrain_grass', 'terrain_dirt', 'terrain_silt', 'terrain_rock',
       'bridge_concrete', 'bridge_steel', 'bridge_rail',
+      'runway', 'apron_slab', 'runway_paint', 'runway_lamp',
     ];
     // All THREE mesh forms per surface. `instancing` and `instancingColor` are
     // separate bits of three's program cache key, so a surface warmed only as a
@@ -1625,6 +1681,14 @@ export class WorldSystem {
     this.water?.dispose();
     for (const m of this.bridgeGroup?.children ?? []) m.geometry?.dispose();
     this.bridgeGroup?.parent?.remove(this.bridgeGroup);
+    for (const h of this._airfieldHandles ?? []) this.physics?.removeStatic(h);
+    for (const a of this._airfields ?? []) {
+      for (const m of a.group?.children ?? []) m.geometry?.dispose();
+      a.group?.parent?.remove(a.group);
+      a.colMesh?.geometry?.dispose();
+      a.colMesh?.parent?.remove(a.colMesh);
+    }
+    this._airfields = null;
     this._tcMesh?.geometry?.dispose();
     if (this._netHandle >= 0) this.physics?.removeStatic(this._netHandle);
     this._netMesh?.geometry?.dispose();

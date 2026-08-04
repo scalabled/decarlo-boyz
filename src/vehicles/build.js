@@ -51,6 +51,7 @@ import { buildInterior, buildBoatInterior } from './interior.js';
 import { buildBoatHull } from './boat.js';
 import { buildHeliBody } from './heli.js';
 import { buildPlaneBody } from './plane.js';
+import { buildTramBody } from './tram.js';
 import { mergeAll, transform, triCount, bakeBoxUV, bakePolarUV } from './geom.js';
 
 const LOD_COUNT = 4;
@@ -87,6 +88,7 @@ function geometryFor(spec, lod) {
   else if (spec.kind === 'boat') body = buildBoatHull(spec, lod);
   else if (spec.kind === 'heli') body = buildHeliBody(spec, lod);
   else if (spec.kind === 'plane') body = buildPlaneBody(spec, lod);
+  else if (spec.kind === 'tram') body = buildTramBody(spec, lod);
   else body = buildCarBody(spec, lod);
 
   // The helicopter carries its own cabin (floor, seats, sticks) inside
@@ -95,7 +97,8 @@ function geometryFor(spec, lod) {
   // against a sill — and a glazed pod has none of those surfaces to hang them on.
   const interior =
     spec.kind === 'boat' ? buildBoatInterior(spec, lod)
-      : spec.kind === 'bike' || spec.kind === 'heli' || spec.kind === 'plane'
+      : spec.kind === 'bike' || spec.kind === 'heli' || spec.kind === 'plane' ||
+        spec.kind === 'tram'
         ? { seat: [], leather: [], dash: [], trim: [], chrome: [], cavity: [] }
         : buildInterior(spec, lod);
 
@@ -151,9 +154,25 @@ function geometryFor(spec, lod) {
     merged.seat = new THREE.BufferGeometry();
     merged.leather = new THREE.BufferGeometry();
     merged.dash = new THREE.BufferGeometry();
-    const lampAll = [];
-    for (const k in merged.lamps) lampAll.push(merged.lamps[k]);
-    merged.lamps = { brake: mergeAll(lampAll) };
+    if (spec.kind === 'tram') {
+      /**
+       * The tram's lit CABIN is a 12 m `drl` strip behind the window band
+       * (see tram.js). Folding it into the single red brake cluster here
+       * would paint the whole window row brake-red from 52 m out at night —
+       * so this one class keeps the LOD1 front/rear split. One extra draw
+       * call, on one vehicle, only when it is far away.
+       */
+      const front = [];
+      const rear = [];
+      for (const k in merged.lamps) {
+        (k === 'head' || k === 'drl' || k === 'indicator' ? front : rear).push(merged.lamps[k]);
+      }
+      merged.lamps = { drl: mergeAll(front), brake: mergeAll(rear) };
+    } else {
+      const lampAll = [];
+      for (const k in merged.lamps) lampAll.push(merged.lamps[k]);
+      merged.lamps = { brake: mergeAll(lampAll) };
+    }
   } else if (lod === 1) {
     /**
      * Beyond ~22 m nothing here resolves as a separate material, so collapse
@@ -189,7 +208,10 @@ function geometryFor(spec, lod) {
   }
   if (merged.cavity.attributes?.position) bakeBoxUV(merged.cavity);
 
-  const wheelGeo = spec.kind === 'boat' || spec.kind === 'heli' || spec.kind === 'plane'
+  // The tram's rail wheels are part of the body (tram.js builds them into the
+  // bogies), so it takes no road-wheel chain either.
+  const wheelGeo = spec.kind === 'boat' || spec.kind === 'heli' ||
+    spec.kind === 'plane' || spec.kind === 'tram'
     ? null : buildWheelGeo(spec, lod);
 
   // Doors are their own meshes — they have to move independently — and are
@@ -561,7 +583,8 @@ export function buildVehicleModel(spec, mats, opts = {}) {
 
   // ---- wheels ------------------------------------------------------------
   const wheels = [];
-  if (spec.kind !== 'boat' && spec.kind !== 'heli' && spec.kind !== 'plane') {
+  if (spec.kind !== 'boat' && spec.kind !== 'heli' && spec.kind !== 'plane' &&
+      spec.kind !== 'tram') {
     for (const hp of spec.wheels) {
       const node = new THREE.Group();
       node.name = `wheel${hp.index}`;

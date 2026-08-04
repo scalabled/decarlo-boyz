@@ -27,9 +27,10 @@ import { BOYZ, BOY_BY_ID, DISTRICTS, LANDMARKS, buildPoiList } from './data.js';
  * here with no edit:
  *
  *   vehicles   `vehicles.classes`  (= specs.js CLASS_IDS) + `vehicles.specOf(id)`
- *              for the display name and the class kind. 11 today, including the
- *              three new ones (bus, bicycle, heli); the count is never written
- *              down here.
+ *              for the display name and the class kind — including every
+ *              aircraft (heli, newsheli, plane, sportplane), which spawn by
+ *              their own placement rules (`_aircraftSpot`); the count is never
+ *              written down here.
  *   weapons    `weapons.weaponIds` (= the keys of the live state map) and
  *              `weapons.states.get(id).def.label` for the name. 16 today.
  *   teleport   `world.landmarks[]`, `world.districts[]` and `world.pois[]` —
@@ -489,6 +490,7 @@ export class CheatMenu {
    * drivable ground with a real heading), then any legal lane pose in an
    * annulus around the player, then a plain offset from the player's own
    * position. Boats want water instead and say so if there is none in reach.
+   * Aircraft use their own placement rules — see `_aircraftSpot`.
    *
    * Writes into `this._v` and returns `{ x, z, yaw, why }` or null.
    */
@@ -497,6 +499,8 @@ export class CheatMenu {
     const p = this.ui?._playerPos?.() ?? this._v2.set(0, 0, 0);
     const px = p.x;
     const pz = p.z;
+
+    if (kind === 'heli' || kind === 'plane') return this._aircraftSpot(kind, px, pz);
 
     if (kind === 'boat') {
       if (typeof world?.isWater !== 'function') return null;
@@ -540,6 +544,67 @@ export class CheatMenu {
     // Last resort: 7 m to the player's right, on whatever ground is there.
     const yaw = (this.ui?.state?.heading ?? 0) * Math.PI / 180;
     return { x: px + Math.cos(yaw) * 7, z: pz - Math.sin(yaw) * 7, yaw };
+  }
+
+  /**
+   * Where an AIRCRAFT can be put down next to the player.
+   *
+   * A helicopter needs nothing but open flat ground — it leaves vertically —
+   * so it takes the first spot in a spiral whose local height spread is small.
+   * A plane needs CLEAR GROUND AHEAD to build speed on, and the nearest road
+   * lane is exactly that: a long strip of real drivable surface with a real
+   * heading down its centreline, which is what a taxiing take-off wants. Only
+   * if no road is in reach does the plane fall back to the flat-ground search
+   * (with a wider flatness footprint, because an 11 m span droops into any
+   * slope the spiral would accept for a helicopter).
+   *
+   * Flatness is judged with `groundY` — the same reconciled walkable-or-deck
+   * height the teleport lands on — sampled at the centre and four points on
+   * the aircraft's own footprint radius, so a rooftop edge or a riverbank
+   * reads as the cliff it is rather than as its average.
+   */
+  _aircraftSpot(kind, px, pz) {
+    if (kind === 'plane') {
+      const roads = this.ctx.peek('world')?.roads;
+      if (roads?.nearestEdge) {
+        const near = roads.nearestEdge(px, pz, 140);
+        if (near?.edge) {
+          const e = near.edge;
+          const lane = near.lane ?? 0;
+          // 14 m along the lane, not the car spawner's 9: half a span plus a
+          // wing's worth of clearance so the tip is never inside the player.
+          const step = e.len > 1 ? 14 / e.len : 0.3;
+          let t = (near.t ?? 0.5) + step;
+          if (t > 0.92) t = (near.t ?? 0.5) - step;
+          t = clamp(t, 0.08, 0.92);
+          roads.laneCenter(e, lane, t, this._v);
+          const yaw = roads.laneYaw ? roads.laneYaw(e, lane) : 0;
+          return { x: this._v.x, z: this._v.z, yaw };
+        }
+      }
+    }
+    const world = this.ctx.peek('world');
+    const foot = kind === 'plane' ? 5.5 : 3.5;
+    for (let r = kind === 'plane' ? 16 : 10; r <= 90; r += 6) {
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        const x = px + Math.cos(a) * r;
+        const z = pz + Math.sin(a) * r;
+        if (world?.isWater?.(x, z)) continue;
+        const y0 = this.groundY(x, z);
+        let flat = true;
+        for (let k = 0; k < 4 && flat; k++) {
+          const b = (k / 4) * Math.PI * 2 + 0.4;
+          const yk = this.groundY(x + Math.cos(b) * foot, z + Math.sin(b) * foot);
+          if (Math.abs(yk - y0) > 0.5) flat = false;
+        }
+        if (flat) return { x, z, yaw: Math.atan2(x - px, z - pz) };
+      }
+    }
+    // Last resort: beside the player, on whatever ground is there — the same
+    // shape as the car fallback, pushed out to keep the disc/span clear.
+    const yaw = (this.ui?.state?.heading ?? 0) * Math.PI / 180;
+    return { x: px + Math.cos(yaw) * 10, z: pz - Math.sin(yaw) * 10, yaw };
   }
 
   _spawnVehicle(type, andEnter) {

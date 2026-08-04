@@ -4,6 +4,7 @@ import { ProtoLibrary, TileBuilder, releaseTile } from './tile.js';
 import { planBuilding, buildLot, buildLotLod, blockPalette } from './archetypes.js';
 import { districtStyle, SURFACES } from './palette.js';
 import { buildLandmark, LANDMARKS, landmarkClaims, adoptLandmarkSites } from './landmarks.js';
+import { buildAirfield } from './airfield.js';
 import { Skyline } from './skyline.js';
 import { syntheticTiles, syntheticLots, SYNTH_TILE } from './debug.js';
 import { clipHalfPlane, polyArea, polyCentroid } from './geom.js';
@@ -308,6 +309,12 @@ export class BuildingSystem {
     // Landmarks are hand-authored and always resident — they are the
     // silhouette, and they must not pop in behind a stream radius.
     this._buildLandmarks();
+
+    // The airfield structures (hangars, terminal, windsock, beacon, fence)
+    // stand on the sites `world` grades and publishes on `world.airfields`.
+    // Always resident, like the landmarks — a 600 m runway with pop-in sheds
+    // is worse than none.
+    this._buildAirfields();
 
     // If `world` is still a stub (no lot stream), drive a synthetic city so the
     // generators can be developed and reviewed in isolation. Self-removing: the
@@ -1168,6 +1175,58 @@ export class BuildingSystem {
     }
   }
 
+  // -------------------------------------------------------------- airfields --
+  /**
+   * One indivisible job per airfield, same shape as `_buildLandmarks`. The
+   * site (bench plane, layout rects, helpers) is read off `world.airfields`
+   * — published by `world/airfield.js`, never re-derived here — and the
+   * builder in `./airfield.js` checks every structure against the emitted
+   * road graph before standing it up. The kerb keep-out guard is applied on
+   * top, belt-and-braces, with a reach that covers the whole field.
+   */
+  _buildAirfields() {
+    this.airfieldTiles = [];
+    this.airfieldReports = [];
+    for (const af of this.world?.airfields ?? []) {
+      if (!af?.pad || !af.layout) continue;
+      this.schedule(() => {
+        const T = new TileBuilder(this.lib, `af_${af.id}`);
+        const lay = af.layout;
+        const reach = Math.max(lay.field.a1, lay.field.d1) + 20;
+        T.setKeepOut(this._keepOutFor(this._roadsNear([
+          [af.x - reach, af.z - reach], [af.x + reach, af.z - reach],
+          [af.x + reach, af.z + reach], [af.x - reach, af.z + reach],
+        ])));
+        let report = null;
+        try {
+          report = buildAirfield(
+            T, this.lib, af, new Rng((af.id.length * 0x9e37 + af.x) >>> 0),
+            (px, pz) => this._groundAt(px, pz), this.world.roads
+          );
+        } catch (err) {
+          console.error(`[buildings] airfield ${af.id} failed`, err);
+          return;
+        } finally {
+          T.setKeepOut(null);
+        }
+        if (!report) return;
+        const built = T.build(this.physics);
+        this.root.add(built.group);
+        this.render?.patchMaterials?.(built.group);
+        this.airfieldTiles.push(built);
+        this.airfieldReports.push(report);
+        this._accum(built.stats);
+        this._colDirty = true;
+        const s = built.sphere;
+        built.cullOff =
+          this.render?.registerCullGroup?.(built.group, {
+            center: s ? [s.center.x, s.center.y, s.center.z] : [af.x, 20, af.z],
+            radius: s ? s.radius + 4 : 420,
+          }) ?? null;
+      }, 8);
+    }
+  }
+
   // ---------------------------------------------------------------- runtime --
   update(dt, ctx) {
     this._drain(dt);
@@ -1318,6 +1377,20 @@ export class BuildingSystem {
       built.push(r2);
     }
 
+    // ...and the airfield structures, which are likewise resident-only.
+    for (const af of this.world?.airfields ?? []) {
+      if (!af?.pad || !af.layout || !this.world?.roads) continue;
+      const T3 = new TileBuilder(this.lib, `pw_${af.id}`);
+      try {
+        buildAirfield(T3, this.lib, af, new Rng(7), (px, pz) => this._groundAt(px, pz), this.world.roads);
+      } catch {
+        continue;
+      }
+      const r3 = T3.build(null);
+      scene.add(r3.group);
+      built.push(r3);
+    }
+
     /**
      * The impostor tier's three surfaces are used ONLY by the resident skyline
      * field, which is built in `init()` and never goes through `TileBuilder` —
@@ -1425,6 +1498,11 @@ export class BuildingSystem {
       releaseTile(b, this.physics);
     }
     this.landmarkTiles = null;
+    for (const b of this.airfieldTiles ?? []) {
+      b.cullOff?.();
+      releaseTile(b, this.physics);
+    }
+    this.airfieldTiles = null;
     this._rgrid = null;
     this._rgSeen = null;
     this.skyline?.dispose();

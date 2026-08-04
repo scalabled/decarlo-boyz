@@ -5,6 +5,7 @@ import {
   corridorHalfWidth, roadHalfWidth, clamp01, smoothstep, smootherstep, lerp, segDist2,
   nearestSiteDist,
 } from './plan.js';
+import { gradeAirfields, airfieldAt, levelAirfieldRoads } from './airfield.js';
 
 /**
  * WORLD — city layout generation.
@@ -812,6 +813,13 @@ export function generateCity(terrain, rng) {
   // `buildings`' trestle — reads it off `plan.js`.
   orientLandmarkSites(terrain);
 
+  /* ---- 0b. bench the two airfields into the heightfield ----------------- */
+  // BEFORE any corridor is laid, so a road crossing a field solves its node
+  // heights against the graded bench and lies flat ON it — the runway can
+  // then coexist with the street grid instead of reserving 600 x 140 m of
+  // city. See `src/world/airfield.js`.
+  const airfieldGrade = gradeAirfields(terrain);
+
   /* ---- 1. river banks: the long arterials that define the waterfront ---- */
   for (const riv of RIVERS) {
     const hw = riv.width / 2;
@@ -922,6 +930,11 @@ export function generateCity(terrain, rng) {
   graph.dedup = dd;
   graph.landmarkReserve = lr;
 
+  /* ---- 8b. level every road crossing an airfield's paved zone ----------- */
+  // Before `rasteriseRoads`, so the corridor field, the terrain sink, the
+  // road mesh and the corridor floor all inherit the level crossing.
+  if (airfieldGrade.on) levelAirfieldRoads(graph);
+
   /* ---- 9. corridor height field the terrain is flattened against -------- */
   const { field, weight } = rasteriseRoads(graph, terrain);
   terrain.applyRoads(field, weight);
@@ -949,6 +962,20 @@ export function generateCity(terrain, rng) {
     let wet = false;
     for (const p of b.poly) if (terrain.waterDist(p[0], p[1]) < -2) wet = true;
     if (wet) continue;
+    // An airfield is open ground: no rowhouse block on the bench. Corner
+    // check as well as centre — a block can straddle the field boundary.
+    if (airfieldGrade.on) {
+      let onField = !!airfieldAt(b.cx, b.cz);
+      if (!onField) {
+        for (const p of b.poly) {
+          if (airfieldAt(p[0], p[1])) {
+            onField = true;
+            break;
+          }
+        }
+      }
+      if (onField) continue;
+    }
     keep.push(b);
   }
 

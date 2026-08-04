@@ -114,6 +114,7 @@ import { buildVehicleModel, modelStats, clearGeometryCache, LOD_COUNT, setVehicl
 import { Vehicle } from './dynamics.js';
 import { DamageModel } from './damage.js';
 import { VehicleGroundShadows } from './groundshadow.js';
+import { TramService } from './tram.js';
 
 const LOD_DIST = [22, 52, 130];
 /** How far a door swings at `open = 1`, radians. 62 degrees. */
@@ -708,6 +709,13 @@ export class VehicleSystem {
     // (b) A live mission vehicle survives every cull; only authorized teardown
     // (mission cleanup, dispose) may remove it.
     if (!force && v.isMission === true) return;
+    // (c) KINEMATIC rolling stock (the tram) survives every cull too. It is a
+    // scheduled service, and it legitimately stands at 0 m/s at a terminus for
+    // seconds at a time — which is exactly the "stalled" predicate the capture
+    // pre-shutter uses to sweep dead traffic out of review frames. A trolley
+    // dwelling at its stop is content, not a wreck; only a hard dispose (or
+    // its owning service) may remove it.
+    if (!hard && v.kinematic === true) return;
     const i = this.vehicles.indexOf(v);
     if (i >= 0) this.vehicles.splice(i, 1);
     const h = this._hidden?.indexOf(v) ?? -1;
@@ -1416,6 +1424,14 @@ export class VehicleSystem {
     const list = this.vehicles;
     for (let i = 0; i < list.length; i++) {
       const v = list[i];
+      /**
+       * KINEMATIC stock (the tram) is posed by its service from `update()` and
+       * must never be integrated: its trajectory IS the rail, and one
+       * `fixedStep` would hand it to the tyre model and gravity. It still sits
+       * in `this.vehicles`, so `_vehicleCollisions` below resolves traffic
+       * against it — that is the half of physics it wants.
+       */
+      if (v.kinematic) continue;
       if (v._sleepTimer > 1.2 && !v.driver && v.grounded >= v.wheels.length - 1) {
         v.prevPosition.copy(v.position);
         v.prevQuaternion.copy(v.quaternion);
@@ -1666,6 +1682,16 @@ export class VehicleSystem {
       this._pendingStage = null;
       this.debugStage(s, {});
     }
+
+    /**
+     * THE TROLLEY. Created lazily because `world` finishes its road/rail
+     * graph on its own schedule relative to ours; the service no-ops until
+     * `ctx.peek('world').roads` has edges, then spawns the one tram and poses
+     * it kinematically every frame — BEFORE the loop below, so this frame's
+     * `syncTransforms` draws this frame's pose. Self-contained in tram.js.
+     */
+    if (!this._tram) this._tram = new TramService(this);
+    this._tram.update(dt, ctx);
 
     // `_selectLod` reads this shared temp; refreshed once per frame here.
     ctx.camera.getWorldPosition(_cam);
@@ -2524,6 +2550,8 @@ export class VehicleSystem {
     this.ctx?.events.off('weather:change', this._onWeather);
     this.ctx?.events.off('game:character', this._onHeroChange);
     this.ctx?.events.off('player:brother', this._onHeroChange);
+    this._tram?.dispose();
+    this._tram = null;
     for (const v of [...this.vehicles]) this.despawn(v, { hard: true });
     this.vehicles.length = 0;
     clearGeometryCache();

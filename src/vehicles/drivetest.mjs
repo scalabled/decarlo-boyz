@@ -67,11 +67,14 @@ const DT = 1 / 120;
  * Every class that drives on WHEELS. The boat has no wheels and no gradient to
  * climb; the helicopter has neither wheels nor a gearbox nor a kerb to ride
  * over, and gets its own section (11) instead of being forced through nine
- * that do not describe it.
+ * that do not describe it. The tram is KINEMATIC rail stock — it is never
+ * stepped by the dynamics at all (`VehicleSystem.fixedUpdate` skips it), so
+ * there is no drivetrain here to test; its gate is `npm run tram`
+ * (src/vehicles/tramprobe.mjs), which asserts its emitted motion on the rail.
  */
 const CAR_TYPES = Object.keys(VEHICLE_SPECS).filter(
   (k) => VEHICLE_SPECS[k].kind !== 'boat' && VEHICLE_SPECS[k].kind !== 'heli' &&
-    VEHICLE_SPECS[k].kind !== 'plane'
+    VEHICLE_SPECS[k].kind !== 'plane' && VEHICLE_SPECS[k].kind !== 'tram'
 );
 // `--type=heli` must still reach section 11 without being dragged through the
 // nine wheeled ones — filter the selection rather than trusting the caller.
