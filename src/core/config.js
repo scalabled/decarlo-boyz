@@ -63,6 +63,40 @@ export const UNITS = {
  *                     nearest few practicals.
  * `drawDistance`      camera far plane, metres — the skyline has to be visible
  * `shadowDistance`    far edge of the last cascade
+ * `trafficBudget`     CEILING on live moving cars near the camera. `traffic`
+ *                     spends min(budget*movingShare, laneCapacity)*volume of it
+ *                     (movingShare 0.72), so on a saturated grid the LANE, not
+ *                     this number, is the wall — see LANE_M_PER_CAR in
+ *                     traffic/population.js. Raising it adds cars where there is
+ *                     spare road (the lower tiers, and open arterials/highways
+ *                     at ultra); it cannot add them to a downtown already at
+ *                     capacity. `props` also parks ~0.7*this many kerb cars.
+ * `pedBudget`         CEILING on live ambient pedestrians near the camera. Most
+ *                     are drawn by the one instanced far-crowd capsule mesh;
+ *                     only ~budget*0.36 (capped at 38) ever get a skinned body,
+ *                     so raising this fills the pavement cheaply. `police` caps
+ *                     its officers at ~0.28*this.
+ *
+ * These two set STREET DENSITY, raised for "more NPCs and cars":
+ *   pedBudget      8/26/44/110  ->  12/42/72/170   (+50 / +62 / +64 / +55 %)
+ *   trafficBudget  5/12/28/64   ->   6/16/38/76    (+20 / +33 / +36 / +19 %)
+ * Low stays lightest — it is the mobile floor.
+ *
+ * THE PEDS TAKE THE BULK OF THE INCREASE, ON PURPOSE. Sidewalks absorb bodies
+ * without congestion, so more peds simply reads as a busier city. Cars are
+ * raised more gently: an early pass pushed trafficBudget to 96 at ultra and
+ * turned the downtown grid into a car PARK — a third to a half of the near
+ * cars were sitting still at capacity, which reads as gridlock, not life. The
+ * ceilings above sit under that: the Golden Triangle grid flows at ~38 moving
+ * cars in the 175 m spawn disc; asking for more just queues them. Most of the
+ * added traffic lands on the open roads that make up the rest of the map.
+ *
+ * `src/core/densprobe.mjs` (npm run dens) measures the EMITTED near-camera ped
+ * count and the frame time downtown — never these constants. Its ped floor sits
+ * ABOVE the old ped ceiling, so only a raised build can reach it (a
+ * by-construction gate, not a lucky sample), and it holds the play-tier frame
+ * budget. Downtown cars are capacity-bound, so their count is reported, not
+ * gated; the car increase lands on the open roads.
  */
 export const QUALITY_PRESETS = {
   // `low` is the PLAYABILITY FLOOR. The governor falls back to it when nothing
@@ -90,8 +124,8 @@ export const QUALITY_PRESETS = {
     streamRadius: 190,
     tileBuildBudgetMs: 3,
     lightSlots: 4,
-    trafficBudget: 5,
-    pedBudget: 8,
+    trafficBudget: 6,
+    pedBudget: 12,
     lodBias: 2.4,
     grassDensity: 0.18,
   },
@@ -120,8 +154,8 @@ export const QUALITY_PRESETS = {
     streamRadius: 300,
     tileBuildBudgetMs: 4,
     lightSlots: 6,
-    trafficBudget: 12,
-    pedBudget: 26,
+    trafficBudget: 16,
+    pedBudget: 42,
     lodBias: 1.8,
     grassDensity: 0.4,
   },
@@ -143,8 +177,8 @@ export const QUALITY_PRESETS = {
     streamRadius: 440,
     tileBuildBudgetMs: 5,
     lightSlots: 8,
-    trafficBudget: 28,
-    pedBudget: 44,
+    trafficBudget: 38,
+    pedBudget: 72,
     lodBias: 1.4,
     grassDensity: 0.6,
   },
@@ -166,8 +200,8 @@ export const QUALITY_PRESETS = {
     streamRadius: 1000,
     tileBuildBudgetMs: 8,
     lightSlots: 8,
-    trafficBudget: 64,
-    pedBudget: 110,
+    trafficBudget: 76,
+    pedBudget: 150,
     lodBias: 0.85,
     grassDensity: 1.0,
   },

@@ -50,6 +50,35 @@ const _fwd = new THREE.Vector3();
  */
 const _cam = new THREE.Vector3();
 
+/**
+ * Metres of drivable lane per moving car — the density knob behind
+ * `laneCapacity()`. `spawnMax` is pinned at 175 m by the collision world, so no
+ * amount of `trafficBudget` can put more than (lane length in that disc)/this
+ * many moving cars on screen: this, not the budget, is the wall the near-camera
+ * car count hits in a dense grid at the top tiers.
+ *
+ * KEPT AT 95 ON PURPOSE, and that is the measured result of trying to lower it.
+ * When the tier budgets were raised for street density, dropping this to pack
+ * more cars into downtown was the obvious next move — and it was tried and
+ * rejected. The traffic harness (node src/traffic/harness.mjs --site=downtown
+ * --q=ultra) flips "nobody stopped forever" from PASS to FAIL at 68 (19 cars
+ * queued > 20 s, one stood ~56 s) AND at 80 (60 s). The Golden Triangle grid is
+ * ALREADY near saturation at 95 — the harness reads 57.9% of car-frames moving,
+ * one car waiting 44.8 s at a light — so any real capacity lift there does not
+ * add flowing traffic, it lengthens the light queue into a car park, which is
+ * exactly what the `desired()` comment warns about. No crash in either case
+ * (write-offs 0, no interpenetration): it is orderly gridlock, but a
+ * minute-long standing queue is not "busy".
+ *
+ * The budget raise still adds cars where there is room for them — the lower
+ * tiers (budget-bound, not capacity-bound) and the non-saturated arterials and
+ * residential roads at ultra, where `min(budget*movingShare, capacity)` is the
+ * budget term. Downtown stays at its natural, already-busy saturation. If a
+ * future road-network change opens the grid up, this can come down — but only
+ * with a fresh harness run showing "nobody stopped forever" still green.
+ */
+const LANE_M_PER_CAR = 95;
+
 export class Director {
   constructor(sys) {
     this.sys = sys;
@@ -99,8 +128,9 @@ export class Director {
    * ultra preset's fifty-five cars into 175 m of residential grid, on top of
    * the forty-five kerb cars `props` puts there, produced a cascading pile-up
    * — cars destroyed each other, every wreck panicked the street, and the
-   * street panicked into more wrecks. One car per ~95 m of drivable lane is
-   * busy without being a car park.
+   * street panicked into more wrecks. `laneCapacity()` bounds it: one car per
+   * `LANE_M_PER_CAR` of drivable lane in the spawn disc, which is still far
+   * sparser than IDM following distance (see that constant).
    */
   desired(ctx) {
     const q = ctx.config.q;
@@ -135,7 +165,7 @@ export class Director {
       if (cx * cx + cz * cz > R * R) continue;
       m += e.len;
     }
-    this._capacity = Math.max(3, m / 95);
+    this._capacity = Math.max(3, m / LANE_M_PER_CAR);
     return this._capacity;
   }
 
