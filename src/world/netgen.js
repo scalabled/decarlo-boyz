@@ -290,6 +290,23 @@ function reserveDisabled() {
 }
 
 /**
+ * A/B hatch for the landmark dead-end weld (`weldLandmarkDeadEnds`), same shape
+ * as `reserveDisabled`. `?noringweld=1` on the page — `drivesweep.mjs
+ * --noringweld` appends it — lays the graph without the weld so the orphan
+ * count climbs back, which is the negative control the ring-orphan ratchet is
+ * proved with.
+ */
+function ringWeldDisabled() {
+  try {
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('noringweld') === '1') return true;
+  } catch { /* no location */ }
+  try {
+    if (typeof process !== 'undefined' && process?.env?.OW_NO_RINGWELD === '1') return true;
+  } catch { /* no process */ }
+  return false;
+}
+
+/**
  * The point on the segment `p -> beyond` where the reserve isoline is crossed,
  * pushed `LM_SPUR` metres further in so the last segment CROSSES the ring's
  * centreline instead of stopping on it — `intersect()` needs a crossing, and a
@@ -1769,6 +1786,17 @@ function buildGraph(corridors, terrain) {
     }
   }
 
+  // --- weld landmark feeder stubs onto the ring (or each other) ---------
+  // Every cut street was pushed LM_SPUR past the reserve isoline so that
+  // `intersect()` would split the ring there and join it. That only fires where
+  // a ring SEGMENT actually sits at the cut point; where the nearest surviving
+  // ring segment is metres along the loop — or the ring is clipped away by the
+  // river (the Point) or a cliff (the Incline) — the stub lands in the gap and
+  // stays a degree-1 dead end. This closes those gaps with a short, flat,
+  // dry-ground link, which is exactly the taper a real street makes into the
+  // road round a plaza. See `drivesweep.mjs`'s ring-orphan assertion.
+  weldLandmarkDeadEnds(graph, terrain);
+
   // --- height relaxation ------------------------------------------------
   relaxHeights(graph, 3);
   // Steel City is steep. Steel City is not vertical: 32% is Canton Avenue,
@@ -1781,6 +1809,124 @@ function buildGraph(corridors, terrain) {
   pruneIslands(graph);
 
   return graph;
+}
+
+/**
+ * How far a stub is allowed to reach for the ring or its neighbour. A grid
+ * street's nodes are up to 72 m apart, so a stub that missed the ring can be a
+ * fair way from the nearest surviving ring node; but a link longer than this
+ * stops being a taper into a plaza and starts being a road of its own, laid
+ * blind across whatever is between the two ends. Measured: 42 m catches every
+ * stub at the Point, the Steel Bowl, the Tower and the Market and the reachable
+ * ones on the Incline, and the ones it does not catch are up a cliff where a
+ * link would be an unclimbable step, not a road.
+ */
+const RING_WELD_GAP = 42;
+
+/**
+ * Close the gaps the ring left open: weld every degree-1 stub near a landmark
+ * onto the nearest node it can safely reach.
+ *
+ * A stub is a cut feeder street that landed in a gap in the landmark ring — the
+ * ring segment it was aimed at was clipped by water or slope, or the nearest
+ * one is metres away along the loop. The intended target is the ring; where the
+ * ring vanished entirely (the Point sits in the Allegheny, so its ring clips to
+ * nothing) the target is the OTHER feeder stubs meeting at the same plaza, which
+ * is the same junction a real street network makes there.
+ *
+ * A link is laid only when it is a road a car can take: dry ground the whole
+ * way, clear of the reserved site, a grade under the city limit, and its own
+ * surface within a low tolerance of the terrain it crosses so it neither floats
+ * nor buries — i.e. it will not trade an orphan for a hole or a step in the
+ * `drivesweep` sense. Run before `relaxHeights`/`pruneIslands`, so a welded stub
+ * rides the height solve with everything else and survives the island prune.
+ */
+function weldLandmarkDeadEnds(graph, terrain) {
+  if (reserveDisabled() || ringWeldDisabled()) return;
+  const deg = (n) => n.links.reduce((s, i) => s + (graph.edges[i].rail ? 0 : 1), 0);
+  const onRing = (n) =>
+    n.links.some((i) => String(graph.edges[i].corridor ?? '').startsWith('ring_'));
+  const neighbourOf = (n) => {
+    const e = graph.edges[n.links.find((i) => !graph.edges[i].rail)];
+    return e ? (e.a === n.id ? e.b : e.a) : -1;
+  };
+  // A candidate link is only laid if every sample along it is dry, clear of the
+  // site, and near enough to the straight height interpolation to sit flat.
+  const linkOk = (a, b) => {
+    const dist = Math.hypot(b.x - a.x, b.z - a.z);
+    if (dist < 0.5 || dist > RING_WELD_GAP) return false;
+    if (Math.abs(b.y - a.y) / dist > 0.20) return false;
+    const steps = Math.max(3, Math.ceil(dist / 4));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      const x = a.x + (b.x - a.x) * t;
+      const z = a.z + (b.z - a.z) * t;
+      if (terrain.waterDist(x, z) <= 8) return false;
+      if (nearestSiteDist(x, z) <= 8) return false;
+      const yLin = a.y + (b.y - a.y) * t;
+      if (Math.abs(terrain.heightAt(x, z) - yLin) > 1.6) return false;
+    }
+    return true;
+  };
+  const hasEdge = (a, b) =>
+    a.links.some((i) => {
+      const e = graph.edges[i];
+      return e.a === b.id || e.b === b.id;
+    });
+
+  let welded = 0;
+  for (const lm of LANDMARKS) {
+    const s = lm.site;
+    if (!s) continue;
+    const cx = lm.x + (s.ox ?? 0);
+    const cz = lm.z + (s.oz ?? 0);
+    const reach = (s.r ?? 0) + (s.hx ?? 0) + (s.hz ?? 0) + 24 + 14;
+    // Nodes near this site, split into the stubs that need help and the targets
+    // that can receive them (the ring, and any through node — never a rail
+    // node, never a stub's own single neighbour).
+    const near = [];
+    for (const nd of graph.nodes) {
+      if (Math.hypot(nd.x - cx, nd.z - cz) > reach) continue;
+      near.push(nd);
+    }
+    for (const d of near) {
+      // Re-read the degree each pass: an earlier weld may already have rescued
+      // this node, and a stub welded to it stops being a valid target as a stub.
+      if (deg(d) !== 1 || onRing(d)) continue;
+      const skip = neighbourOf(d);
+      let best = null;
+      let bestScore = Infinity;
+      for (const t of near) {
+        if (t === d || t.id === skip) continue;
+        if (hasEdge(d, t)) continue;
+        const dist = Math.hypot(t.x - d.x, t.z - d.z);
+        if (dist > RING_WELD_GAP) continue;
+        // Prefer the ring, then a through junction, then another stub — and
+        // among equals, the nearest. The class bonus is larger than any gap so
+        // a ring node 40 m off still beats a stub 5 m off. Within a class, bias
+        // toward a LOW-degree target: welding onto a degree-2 ring bend makes a
+        // T, welding onto an already-busy crossing makes a 4+ node, and the
+        // re-entrant notch a 4+ crossing leaves is exactly the junction-pad hole
+        // `drivesweep` counts. Keep the new junctions as simple as the geometry
+        // allows so the weld does not trade an orphan for a hole.
+        const cls = onRing(t) ? 0 : deg(t) >= 2 ? 100 : 200;
+        const score = cls + dist + deg(t) * 4;
+        if (score < bestScore && linkOk(d, t)) {
+          bestScore = score;
+          best = t;
+        }
+      }
+      if (!best) continue;
+      graph.addEdge(d.id, best.id, {
+        kind: 'street',
+        lanes: 2,
+        corridor: `${lm.id}_link`,
+        name: `${lm.name} Approach`,
+      });
+      welded++;
+    }
+  }
+  if (welded) console.log(`[world] welded ${welded} landmark feeder stub(s) onto the ring`);
 }
 
 /**

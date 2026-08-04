@@ -79,6 +79,10 @@
  *   node src/world/drivesweep.mjs --nokerbfix    the kerb-containment fix reverted
  *     containment 7.79% -> 10.28% FAIL · holes, steps and junction all PASS
  *     unchanged
+ *   node src/world/drivesweep.mjs --noringweld   the landmark feeder weld reverted
+ *     orphans 3 -> 23 FAIL against the <= 5 ratchet · holes 258.0 m unchanged
+ *     (the weld closes connectivity gaps, not junction-pad notches) · steps,
+ *     junction and containment all green
  *   node src/world/drivesweep.mjs --noreserve    landmark reservation off
  *   node src/world/drivesweep.mjs --nogapfix     footway skirt + floor reverted
  *
@@ -173,6 +177,19 @@ const MAX_HOLE_M = Number(args.maxhole ?? 300);
 const MAX_STEPS = Number(args.maxsteps ?? 10600);
 const MAX_JUNCTION_BAD = Number(args.maxjunc ?? 4100);
 const MAX_UNCONTAINED_PCT = Number(args.maxuncontained ?? 8.2);
+/**
+ * RATCHET (rule 13). Total degree-1 stubs near a landmark that never welded to
+ * its ring — the "roads not lining up" complaint at its source, since a stub is
+ * a feeder street that dead-ends into a gap where the ring was meant to catch
+ * it, and a car routed across that gap drives off the end of the road.
+ *
+ * Baseline before `netgen.weldLandmarkDeadEnds`: 23 (point 4, incline 11,
+ * stadium 5, tower 1, market 2). After it: 3 — all on the Duquesne Incline's
+ * Mt. Washington face, where the stub is up a cliff and a link to it would be
+ * an unclimbable step, not a road, so the weld correctly refuses it. The
+ * `--noringweld` control reverts the weld and takes this back to 23.
+ */
+const MAX_ORPHANS = Number(args.maxorphans ?? 5);
 
 const portOpen = (port) =>
   new Promise((res) => {
@@ -221,6 +238,7 @@ try {
   if (args.nokerbfix) extra += '&nokerbfix=1';
   if (args.nopadfix) extra += '&nopadfix=1';
   if (args.nocapfix) extra += '&nocapfix=1';
+  if (args.noringweld) extra += '&noringweld=1';
   await page.goto(`http://127.0.0.1:${PORT}/?capture=1&lockstep=1&prewarm=0&q=high${extra}`, {
     waitUntil: 'domcontentloaded',
     timeout: 120000,
@@ -299,6 +317,17 @@ check(
     `open ground ${R.contain.causeOpen} (of which ${R.contain.causeNeighbour} are a node-SHARING edge's lane)` +
     `\n        by kind ${JSON.stringify(R.contain.byKind)} · on a bridge deck ${R.contain.onBridge}` +
     fmt(R.contain.worst)
+);
+const orphanTotal = (R.rings ?? []).reduce((s, r) => s + r.orphans, 0);
+const orphanWorst = (R.rings ?? [])
+  .filter((r) => r.orphans > 0)
+  .map((r) => `${r.id} ${r.orphans}${r.orphanAt.length ? ' ' + JSON.stringify(r.orphanAt.slice(0, 3)) : ''}`)
+  .join(' · ');
+check(
+  orphanTotal <= MAX_ORPHANS,
+  'every feeder street reaches the ring',
+  `${orphanTotal} landmark feeder stub(s) (RATCHET <= ${MAX_ORPHANS}) dead-end into a gap and never ` +
+    `weld to the ring — a road that stops in mid-air${orphanWorst ? `; ${orphanWorst}` : ''}`
 );
 
 function fmt(list) {
