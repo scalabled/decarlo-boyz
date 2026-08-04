@@ -20,9 +20,15 @@
  *          centroid tracks; a raw >3.5 kHz ratio is near zero and measures
  *          nothing (presenceTilt is printed for reference only).
  *        - recovered f0 (Hz): the pitched register. Uncanny if too high.
+ *        - F4-band fraction: power in the 2.9-4.3 kHz 4th-formant band over the
+ *          whole voiced range. vox.js now synthesises a 4th formant (the old
+ *          model had three) fed by an effort-scaled source, so it is lit on a
+ *          shout and barely on calm talk — a second, independent view of the
+ *          same drive split, at the top of the spectrum instead of the centroid.
  *      Asserts the talky squad bark ('copy') is warmer than a hard ceiling, the
- *      enemy shout ('contact') stays bright enough to read at distance, and the
- *      shout sits above the talk (the drive-scaled split holds).
+ *      enemy shout ('contact') stays bright enough to read at distance, the
+ *      shout centroid sits above the talk, the shout carries a real 4th formant,
+ *      and that 4th formant is lit harder on the shout than the talk.
  *
  * Usage:
  *   node src/audio/voxwarmthprobe.mjs            # run the gate
@@ -115,6 +121,27 @@ function presenceTilt(mag, binHz) {
     else if (f >= 1500 && f < 3500) pres += p;
   }
   return body > 1e-14 ? pres / body : 0;
+}
+
+/**
+ * Fourth-formant presence: fraction of audible power in the F4 band
+ * (2.9-4.3 kHz) over the whole voiced range (150 Hz-4.3 kHz). vox.js adds a
+ * static F4 resonator that the old 3-formant model lacked, and — because it is
+ * fed the glottal source, whose spectral tilt scales with vocal effort — it is
+ * barely lit on calm talk and fully lit on a shout. So this is the drive split
+ * measured at the TOP of the spectrum: a genuine emitted 4th formant on the
+ * shout, and more of it than on the talk. Reverting vox.js (no F4 + a source
+ * that does not brighten with effort) collapses both, which is the negative
+ * control. Measured on the rendered buffer, never on the formant table.
+ */
+function f4Band(mag, binHz) {
+  let band = 0, tot = 0;
+  for (let k = 0; k < mag.length; k++) {
+    const f = k * binHz, p = mag[k] * mag[k];
+    if (f >= 150 && f < 4300) tot += p;
+    if (f >= 2900 && f < 4300) band += p;
+  }
+  return tot > 1e-14 ? band / tot : 0;
 }
 
 /** Fundamental via low-lag autocorrelation of the raw signal. */
@@ -236,13 +263,23 @@ const PAGE_RENDER = `(async () => {
 const SR = 48000;
 // "Background, not a rave": recovered beat period must be at least this long.
 // 130 bpm = 0.4615 s/beat; a firm rustbelt ceiling is ~0.44 s (<=136 bpm).
-// Voice ceilings/floors, tuned around the measured warmed values with headroom.
+// Voice ceilings/floors, tuned around the measured values with headroom.
 // Warmth is read off the spectral centroid of the rendered bark. Lower = warmer
-// (less of the buzzy upper-harmonic edge). Baselines before the vox.js warming:
-// copy 421 Hz, contact 609 Hz. After: copy 334, contact 477.
-const COPY_CENTROID_MAX = 400;    // squad talk must be warm  (RATCHET; NC: revert -> 421 RED)
+// (less of the buzzy upper-harmonic edge). History, each measured on the render:
+//   pre-warmth:      copy 421, contact 609
+//   warmth pass:     copy 334, contact 477
+//   naturalness pass:copy 287, contact 485  (effort-scaled glottal tilt + F4 +
+//                                            sharper calm-voice formant Q)
+// RATCHET (rule 13): lowered 400 -> 320 to record the warmer talk. Do not raise
+// it to make a run go green — lower it when you warm the voice further.
+const COPY_CENTROID_MAX = 320;    // squad talk must be warm  (RATCHET; NC: revert -> 334 RED)
 const CONTACT_CENTROID_MIN = 430; // enemy shout must stay bright enough to read (NC: over-warm -> RED)
 const SHOUT_OVER_TALK_MIN = 80;   // shout centroid must sit above talk: proves the drive split
+// F4 presence (fraction of 150 Hz-4.3 kHz power in the 2.9-4.3 kHz F4 band).
+// Measured: contact 0.36%, copy 0.12%; reverting vox.js gives contact 0.07%,
+// copy 0.06% (no F4, no effort tilt) — the negative controls below.
+const CONTACT_F4_MIN = 0.0020;    // the shout carries a real 4th formant (NC: revert -> 0.0007 RED)
+const F4_SHOUT_OVER_TALK_MIN = 0.0010; // F4 is lit harder on the shout than the talk (NC: revert -> 0.0001 RED)
 
 const { port, server } = await startServer({});
 const browser = await chromium.launch({
@@ -299,15 +336,18 @@ try {
     const { mag, binHz } = avgSpectrum(x, SR);
     const c = centroid(mag, binHz);
     const hb = presenceTilt(mag, binHz);
+    const f4 = f4Band(mag, binHz);
     const f0 = estimateF0(x, SR);
-    rows[name] = { c, hb, f0 };
-    console.log(`  ${name.padEnd(8)} centroid=${c.toFixed(0)}Hz  prestilt=${hb.toFixed(3)}  f0=${f0.toFixed(1)}Hz`);
+    rows[name] = { c, hb, f4, f0 };
+    console.log(`  ${name.padEnd(8)} centroid=${c.toFixed(0)}Hz  F4band=${(f4 * 100).toFixed(2)}%  prestilt=${hb.toFixed(3)}  f0=${f0.toFixed(1)}Hz`);
   }
   const copy = rows.copy, contact = rows.contact;
   const checks = [
     ['copy centroid < ' + COPY_CENTROID_MAX + ' (warm talk)', copy.c < COPY_CENTROID_MAX, copy.c.toFixed(0)],
     ['contact centroid > ' + CONTACT_CENTROID_MIN + ' (shout still cuts)', contact.c > CONTACT_CENTROID_MIN, contact.c.toFixed(0)],
     ['contact - copy > ' + SHOUT_OVER_TALK_MIN + ' (drive split holds)', (contact.c - copy.c) > SHOUT_OVER_TALK_MIN, (contact.c - copy.c).toFixed(0)],
+    ['contact F4band > ' + (CONTACT_F4_MIN * 100).toFixed(2) + '% (shout has a real 4th formant)', contact.f4 > CONTACT_F4_MIN, (contact.f4 * 100).toFixed(2) + '%'],
+    ['contact F4 - copy F4 > ' + (F4_SHOUT_OVER_TALK_MIN * 100).toFixed(2) + '% (F4 effort split)', (contact.f4 - copy.f4) > F4_SHOUT_OVER_TALK_MIN, ((contact.f4 - copy.f4) * 100).toFixed(2) + '%'],
   ];
   console.log('');
   for (const [label, ok, val] of checks) {

@@ -304,7 +304,10 @@ export const BOYZ = {
     weapons: ['fists', 'pipe', 'flare', 'speargun', 'harpoon', 'depth'],
     start: ['fists', 'pipe', 'flare', 'speargun'],
     radio: ['slack', 'gold', 'furnace', 'incline'],
-    car: 'truck',
+    // Carson's own car: a white body-on-frame SUV (the 'suv' class, an Overlook).
+    // Tall, boxy, high stance and slow to roll — the eldest brother's tow rig,
+    // not a sports car. White paint with his teal accent on the calipers.
+    car: 'suv',
     intro: {
       title: 'CARSON',
       sub: 'Eight chapters on the water',
@@ -391,7 +394,10 @@ export const BOYZ = {
     weapons: ['fists', 'wrench', 'nailgun', 'sprayer', 'rivetgun', 'launcher'],
     start: ['fists', 'wrench', 'nailgun', 'rivetgun'],
     radio: ['grease', 'gold', 'redline', 'furnace'],
-    car: 'muscle',
+    // Aidan's own car: a red compact pickup (the 'pickup' class, a Steelbed) —
+    // cab plus an open bed for hauling panels to and from the body shop. Red
+    // paint with his amber accent on the calipers.
+    car: 'pickup',
     intro: {
       title: 'AIDAN',
       sub: 'Eight chapters of hammered metal',
@@ -481,11 +487,12 @@ export const BOYZ = {
     weapons: ['fists', 'crowbar', 'tackgun', 'emp', 'smg', 'rocket'],
     start: ['fists', 'crowbar', 'tackgun', 'smg'],
     radio: ['redline', 'furnace', 'grease', 'slack'],
-    // Dylan's own car, named specifically. A front-drive fastback: the only
-    // class in the fleet with its mass over the driven axle (comZ 0.60 against
-    // the Allegheny's 0.45), so it hooks up where a rear-drive car spins and
-    // washes wide at the limit instead of stepping out. Fits the fast brother
-    // without making him the muscle brother.
+    // Dylan's own car: a grey Kia K5 (the 'kessel' class). A front-drive
+    // four-door fastback — the only class in the fleet with its mass over the
+    // driven axle (comZ 0.60 against the Allegheny's 0.45), so it hooks up where
+    // a rear-drive car spins and washes wide at the limit instead of stepping
+    // out. Fits the fast brother without making him the muscle brother. Grey
+    // paint with his cyan accent on the calipers.
     car: 'kessel',
     intro: {
       title: 'DYLAN',

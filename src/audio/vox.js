@@ -122,25 +122,36 @@ export const BARKS = {
 const WAVE_CACHE = new WeakMap();
 
 /**
- * Glottal-ish pulse. A 1/n^1.15 rolloff kept a lot of energy on the high
- * harmonics, and a hard periodic source that bright is exactly the buzzy,
- * "Speak&Spell" edge that reads as alien. A real glottal flow falls off
- * steeper, so 1/n^1.55 warms the source toward a human chest voice — but not so
- * steep it goes muffled: enough upper harmonics survive for the formants to
- * colour and for a shout to still cut. The even harmonics are also pulled down
- * (a rounder pulse, less reedy).
+ * Glottal-ish pulse, with an EFFORT-DEPENDENT spectral tilt.
+ *
+ * A 1/n^1.15 rolloff kept a lot of energy on the high harmonics, and a hard
+ * periodic source that bright is exactly the buzzy, "Speak&Spell" edge that
+ * reads as alien. A real glottal flow falls off steeper — but by how much
+ * depends on vocal EFFORT: a relaxed chest voice has a steep source (little
+ * high-harmonic energy, warm), a shout drives the folds harder and the source
+ * flattens (more high harmonics, brighter, carries at distance). Real speech
+ * modulates this "spectral tilt" with loudness, and doing it at the SOURCE is
+ * more honest than only brightening the output filter.
+ *
+ * So the rolloff exponent `tilt` is chosen by the caller from the bark's drive:
+ * ~1.85 for calm squad talk (warm), ~1.45 for a panicked yell (bright). Waves
+ * are cached per exponent bucket. The even harmonics are pulled down a little
+ * (a rounder pulse, less reedy) at every tilt.
  */
-function glottalWave(actx) {
-  let w = WAVE_CACHE.get(actx);
+function glottalWave(actx, tilt = 1.6) {
+  let byCtx = WAVE_CACHE.get(actx);
+  if (!byCtx) WAVE_CACHE.set(actx, (byCtx = new Map()));
+  const bucket = Math.round(tilt * 20) / 20; // 0.05 resolution keeps the cache small
+  let w = byCtx.get(bucket);
   if (w) return w;
-  const N = 40;
+  const N = 48; // reach ~4.8 kHz at f0=100 so F4 has harmonics to excite
   const real = new Float32Array(N);
   const imag = new Float32Array(N);
   for (let n = 1; n < N; n++) {
-    imag[n] = (1 / Math.pow(n, 1.55)) * (n % 2 === 0 ? -0.6 : 1);
+    imag[n] = (1 / Math.pow(n, bucket)) * (n % 2 === 0 ? -0.6 : 1);
   }
   w = actx.createPeriodicWave(real, imag, { disableNormalization: false });
-  WAVE_CACHE.set(actx, w);
+  byCtx.set(bucket, w);
   return w;
 }
 
@@ -158,11 +169,23 @@ export function bark(actx, bank, rng, o = {}) {
   const level = o.level ?? 1;
   const out = gain(actx, 0.2); // VOICE TRIM
 
+  // Vocal effort. Calm squad chatter sits ~0.9, a panicked yell ~1.5. It drives
+  // three things at once — the source spectral tilt (here), the formant
+  // sharpness, and the presence/saturation downstream — so the whole voice
+  // brightens together as it gets louder, which is what a real one does.
+  const dr = spec.drive ?? 1;
+  // Straddle the old fixed 1.55: calm talk warmer (~1.75), a yell brighter.
+  const tiltExp = clamp(1.7 - 0.5 * (dr - 1), 1.45, 1.9);
+  // Formant Q: sharpen the calm voice for clear vowels; leave the shout broad
+  // and rough (it needs to carry, not to be pretty). Never below ~0.9 so a yell
+  // stays intelligible.
+  const qScale = clamp(1.35 - 0.6 * (dr - 0.9), 0.9, 1.35);
+
   const total = spec.syl.reduce((s, x) => s + x.d + (x.g ?? 0), 0);
 
   /* ---- source ---------------------------------------------------- */
   const src = actx.createOscillator();
-  src.setPeriodicWave(glottalWave(actx));
+  src.setPeriodicWave(glottalWave(actx, tiltExp));
   const srcGain = gain(actx, 0);
   src.connect(srcGain);
 
@@ -173,6 +196,7 @@ export function bark(actx, bank, rng, o = {}) {
   // together under ~2% so it warms rather than warbles. Skip on the death line,
   // where the pitch is meant to collapse cleanly.
   if (!spec.dying) {
+    const lfoEnd = t0 + total + 0.5;
     const vibHz = rng.range(4.6, 5.8);
     const vib = actx.createOscillator();
     vib.type = 'sine'; vib.frequency.value = vibHz;
@@ -182,9 +206,18 @@ export function bark(actx, bank, rng, o = {}) {
     drift.type = 'sine'; drift.frequency.value = rng.range(0.7, 1.3);
     const dg = gain(actx, f0 * 0.012);
     drift.connect(dg); dg.connect(src.frequency);
-    const lfoEnd = t0 + total + 0.5;
+    // Fast flutter (~9-12 Hz). A real larynx has a fine cycle-to-cycle jitter
+    // above the vibrato band; the reference synth builds it from 7.1 + 12.7 Hz
+    // components. Adding this third, faster, shallow term is what stops the
+    // pitch reading as a clean sine-modulated tone and pushes it toward a
+    // living voice. Kept tiny (~0.4%) so it textures rather than warbles.
+    const flut = actx.createOscillator();
+    flut.type = 'sine'; flut.frequency.value = rng.range(8.5, 12.5);
+    const fg = gain(actx, f0 * 0.004);
+    flut.connect(fg); fg.connect(src.frequency);
     vib.start(t0); vib.stop(lfoEnd);
     drift.start(t0); drift.stop(lfoEnd);
+    flut.start(t0); flut.stop(lfoEnd);
   }
 
   // Aspiration: always a little, a lot when hurt or dying.
@@ -204,8 +237,30 @@ export function bark(actx, bank, rng, o = {}) {
   for (let i = 0; i < 3; i++) {
     const f = first[i] * tract;
     const bw = first[i + 3];
-    const bp = biquad(actx, 'bandpass', f, clamp(f / bw, 1.5, 14));
+    const bp = biquad(actx, 'bandpass', f, clamp((f / bw) * qScale, 1.5, 14));
     const g = gain(actx, [1.0, 0.55, 0.24][i]);
+    excite.connect(bp);
+    bp.connect(g);
+    fs.push({ bp, g });
+  }
+  // F4 — a fixed high resonance. Real adult voices carry a 4th (and 5th)
+  // formant clustered around 3.3-3.7 kHz; the 3-formant model has none, which
+  // is a large part of why a pure source+F1F2F3 vowel reads thin and slightly
+  // synthetic. F4 barely moves across vowels, so it is built once and held for
+  // the whole bark (the per-vowel glide loop below only touches fs[0..2]). It
+  // is pushed into `fs` only so it feeds `throat` with the others.
+  {
+    const f4Hz = clamp(3350 * tract, 2600, 4200);
+    // A parallel bank (unlike a cascade) does not inherit the lower formants'
+    // energy, so a high formant fed a source that already rolls off steeply
+    // comes out near-silent without makeup gain — the same compensation
+    // struckResonator() applies to its high-Q partials. 0.34 puts F4 at a
+    // believable "ring" level next to F3 (0.24). Its EXCITATION still scales
+    // with vocal effort for free: the calm voice's steep source barely lights
+    // it, a bright yell lights it fully — so F4 adds cut to a shout and only a
+    // little air to talk, which is exactly right.
+    const bp = biquad(actx, 'bandpass', f4Hz, f4Hz / 360);
+    const g = gain(actx, 0.34);
     excite.connect(bp);
     bp.connect(g);
     fs.push({ bp, g });
@@ -217,7 +272,6 @@ export function bark(actx, bank, rng, o = {}) {
   // squad line (drive ~0.9) gets a gentle 2.2 dB presence and light saturation
   // so it reads as a person; a panicked enemy yell (drive ~1.5) keeps a bright,
   // cutting 4.0 dB peak and more grit so it still punches through at 30 m.
-  const dr = spec.drive ?? 1;
   const throat = biquad(actx, 'peaking', 470, 1.0, 4.2);          // chest warmth
   const presence = biquad(actx, 'peaking', 2550, 1.2, clamp(dr * 3.0 - 0.5, 1.6, 5)); // presence
   const hp = biquad(actx, 'highpass', 140, 0.7);
@@ -241,8 +295,18 @@ export function bark(actx, bank, rng, o = {}) {
   }
 
   /* ---- per-syllable automation ----------------------------------- */
+  // Declination: across a spoken phrase the pitch drifts gently DOWN, and a
+  // voice that holds a flat baseline across syllables is a classic robot tell.
+  // Applied only where it won't fight the authored contour — skip it when the
+  // bark is meant to climb (a panicked yell), is a single syllable, or is the
+  // death line (which collapses on its own).
+  const nSyl = spec.syl.length;
+  const rising = spec.syl[nSyl - 1].p >= spec.syl[0].p;
+  const declines = !spec.dying && !rising && nSyl > 1;
+  const declAt = (i) => (declines ? 1 - 0.07 * (i / (nSyl - 1)) : 1);
+
   let t = t0;
-  src.frequency.setValueAtTime(f0 * spec.syl[0].p, t0);
+  src.frequency.setValueAtTime(f0 * spec.syl[0].p * declAt(0), t0);
   for (let i = 0; i < spec.syl.length; i++) {
     const s = spec.syl[i];
     const v = VOWELS[s.v] ?? VOWELS.a;
@@ -277,11 +341,11 @@ export function bark(actx, bank, rng, o = {}) {
       const f = v[k] * tract * (1 + rng.range(-0.02, 0.02));
       const bw = v[k + 3];
       fs[k].bp.frequency.setTargetAtTime(f, Math.max(t - 0.03, t0), 0.014);
-      fs[k].bp.Q.setTargetAtTime(clamp(f / bw, 1.5, 14), Math.max(t - 0.03, t0), 0.02);
+      fs[k].bp.Q.setTargetAtTime(clamp((f / bw) * qScale, 1.5, 14), Math.max(t - 0.03, t0), 0.02);
     }
 
     /* pitch contour: rise into the stressed syllable, sag at the end */
-    const pTarget = f0 * s.p;
+    const pTarget = f0 * s.p * declAt(i);
     src.frequency.setTargetAtTime(pTarget, t, 0.03);
     if (spec.dying && i === spec.syl.length - 1) {
       sweep(src.frequency, t + 0.05, pTarget, pTarget * 0.45, s.d);

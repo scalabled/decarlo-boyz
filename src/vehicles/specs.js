@@ -99,6 +99,18 @@ export const PAINTS = {
     { name: 'rust brown', color: 0x6b4426, f: 0.02, c: 0.1 },
   ],
   police: [{ name: 'precinct', color: 0x0b0d10, f: 0.3, c: 1.0 }],
+  /**
+   * HERO POOLS — the three brothers' own cars, each a single believable
+   * catalogue colour so the personal car reads the same every time you get in
+   * it. They are hero-only classes (`kessel`, `pickup`, `suv` never appear in
+   * `DISTRICT_MIX`), so a single-entry pool is not a loss of variety — it is the
+   * point: Dylan's K5 is grey, Aidan's Ranger is red, Carson's 4Runner is white.
+   * Tone jitter still nudges the lightness a shade and the 1-in-6 beater roll can
+   * still respray one matte, but the HUE never leaves grey / red / white.
+   */
+  k5grey: [{ name: 'k5 grey', color: 0x767c84, f: 0.55, c: 1.0 }],
+  rangerred: [{ name: 'ranger red', color: 0xa72c22, f: 0.42, c: 1.0 }],
+  runnerwhite: [{ name: 'runner white', color: 0xdedcd6, f: 0.12, c: 1.0 }],
 };
 
 /* ------------------------------------------------------------------ */
@@ -556,8 +568,12 @@ export const VEHICLE_SPECS = {
     /** 245/40 R19 on a multi-spoke, and the calipers are the giveaway. */
     wheel: {
       radius: 0.345, width: 0.245, rimFrac: 0.71, spokes: 10, style: 'split',
-      /** Acid green. See `build.js` — LOD0 only, and nothing else pays for it. */
-      caliper: 0x9bd21a,
+      /**
+       * Dylan's accent (`#5fd0ff`, a cold cyan). See `build.js` — LOD0 only, and
+       * nothing else pays for it. The K5 is Dylan's car and the caliper is where
+       * his trim colour lands: grey car, cyan calipers behind black alloys.
+       */
+      caliper: 0x5fd0ff,
     },
     drive: 'fwd',
     susp: {
@@ -609,7 +625,13 @@ export const VEHICLE_SPECS = {
     steer: { max: 0.56, speedFalloff: 0.58, rate: 4.6, returnRate: 5.6, counterAssist: 0.38 },
     aero: { cd: 0.30, area: 2.08, downF: 0.14, downR: 0.20, yawDrag: 3.3 },
     body: { hp: 950, crumple: 1.0 },
-    paints: ['common', 'loud'],
+    /**
+     * GREY, and only grey. This is Dylan's K5, named by the player off a real
+     * grey sport sedan. `common`/`loud` used to roll it a red or a burgundy about
+     * one spawn in five, which is why it kept reading as "a red coupe" — a K5 is
+     * a grey four-door fastback, so `k5grey` is the whole pool.
+     */
+    paints: ['k5grey'],
     style: {
       /**
        * DERIVED FROM THE ALLEGHENY'S BLOCK, not authored from nothing, and the
@@ -1740,6 +1762,239 @@ export const VEHICLE_SPECS = {
       skidX: 0.86, skidZ0: -1.45, skidZ1: 1.35, skidY: 0.03, skidR: 0.055,
       headlight: { w: 0.13, h: 0.11, y: 0.72, inset: 0, kind: 'round' },
       taillight: { w: 0.08, h: 0.08, y: 2.32, inset: 0, kind: 'round' },
+    },
+  },
+
+  /* ------------------------------------------------------ pickup ---- */
+  /**
+   * ──────────────────────────────────────────────────────────────────────
+   * THE STEELBED — AIDAN'S CAR. A COMPACT PICKUP, cab + open bed.
+   * ──────────────────────────────────────────────────────────────────────
+   * The player supplied a red single-cab Ford Ranger: a two-door cab, an open
+   * cargo BED behind it, a tall upright grille and a higher stance than a car.
+   * None of that body existed — the fleet had a car, a van and a 7.2 m flatbed
+   * lorry, and nothing with a separate bed box at compact scale.
+   *
+   * It is built on `shape: 'truck'`, which already knows how to run a cab
+   * greenhouse forward and drop the roofline behind it — the same station code
+   * that gives the Millhand its cab-over-flatbed break. The difference is TWO
+   * numbers and one builder:
+   *
+   *   - `tailY` is LOW (0.99, against the Millhand's 1.30 and the cab roof's
+   *     1.79). So behind the rear cab window the lofted body settles to a low
+   *     flat deck — the bed FLOOR — and the silhouette steps down from the cab
+   *     roof to that floor. `shapeprobe` measures exactly that step.
+   *   - `bed: true` builds a real pickup bed on top of the floor (see
+   *     `pickupBed` in body.js): two smooth side walls with a capping rail, a
+   *     front bulkhead against the cab and a drop tailgate — NOT the Millhand's
+   *     stake posts, which read as a farm lorry.
+   *
+   * Red, and only red (`rangerred`). Aidan's accent (`#ffc93c`, amber) is the
+   * caliper. Dynamics sit between the van and the truck: 2.0 t, RWD, a torquey
+   * six that will still climb a Pittsburgh grade with a load in the back.
+   */
+  pickup: {
+    id: 'pickup',
+    name: 'Steelbed',
+    kind: 'car',
+    seats: 2,
+    doors: 2,
+    dims: { L: 5.30, W: 2.16, H: 1.82 },
+    mass: 2050,
+    comY: 0.66,
+    /** A pickup carries its mass forward empty; 44% on the rear axle. */
+    comZ: 0.44,
+    wheelbase: 3.20,
+    trackF: 1.70, trackR: 1.68,
+    /** Aidan's accent (`#ffc93c`, amber) on the calipers. See `build.js`. */
+    wheel: { radius: 0.40, width: 0.27, rimFrac: 0.58, spokes: 6, style: 'split', caliper: 0xffc93c },
+    drive: 'rwd',
+    susp: {
+      travel: 0.24, rideHeight: 0.20,
+      freqF: 1.55, freqR: 1.70,
+      dampF: 0.36, dampR: 0.32,
+      reboundScale: 1.4,
+      arbF: 15000, arbR: 6000,
+      camberF: -0.008, camberR: 0,
+      toeF: 0.002, toeR: 0.002,
+    },
+    tyre: { ...TYRE_ROAD, muLong: 1.26, muLat: 1.18, relax: 0.54, loadSens: 0.11 },
+    engine: {
+      // 3.5 V6, ~300 lb-ft. Enough to launch a loaded bed on a 20 deg street.
+      peakTorque: 560, peakRpm: 3200, redline: 5400, idle: 720,
+      inertia: 0.5, friction: 0.07, brakeTorque: 56,
+    },
+    gearbox: {
+      // A deep reverse (like the van's) so it will still back UP a dirt bank —
+      // reversing a nose-down slope unloads the driven rear axle, so it needs
+      // the ratio. See `testReverse`.
+      gears: [-4.1, 0, 3.85, 2.30, 1.55, 1.15, 0.90],
+      final: 3.90, eff: 0.88,
+      shiftUp: 0.86, shiftDown: 0.42, shiftTime: 0.34,
+      autoClutchRpm: 1100,
+    },
+    diff: { lock: 0.35, preload: 80 },
+    brakes: { front: 3200, rear: 2100, handbrake: 2600, bias: 0.6 },
+    steer: { max: 0.48, speedFalloff: 0.68, rate: 3.1, returnRate: 4.0, counterAssist: 0.26 },
+    aero: { cd: 0.46, area: 3.1, downF: 0, downR: 0, yawDrag: 5.0 },
+    body: { hp: 1300, crumple: 0.9 },
+    paints: ['rangerred'],
+    style: {
+      shape: 'truck',
+      groundY: 0.20,
+      roofY: 1.79,
+      beltY: 1.10,
+      sillY: 0.56,
+      shoulderY: 0.98,
+      hwMax: 1.08,
+      noseY: 1.16, noseHw: 1.05, noseZ: 2.92,
+      /**
+       * THE BED FLOOR. `tailY` is where the lofted top settles behind the cab —
+       * a low flat deck. The cab roof is 0.80 m above it, which is the step the
+       * eye (and `shapeprobe`) reads as "that is a pickup, not a wagon".
+       */
+      tailY: 0.99, tailHw: 1.06, tailZ: -3.02,
+      cowlZ: 1.66, cowlY: 1.30,
+      /** A short, upright cab: header just behind the cowl, quick backlight. */
+      windscreenTopZ: 1.00, roofRearZ: 0.44,
+      backlightBaseZ: 0.18,
+      greenhouseInset: 0.07, greenhouseTaper: 0.05,
+      pillarA: 0.11, pillarB: 0.0, pillarC: 0.12,
+      archF: { z: 1.66, r: 0.52, flare: 0.05 },
+      archR: { z: -1.66, r: 0.54, flare: 0.055 },
+      crownDeck: 0.02, crownRoof: 0.05, crownBonnet: 0.04,
+      creaseY: 0.86, creaseDepth: 0.02,
+      bumperDrop: 0.20, splitter: 0, diffuser: 0,
+      bumperF: 0.18, bumperR: 0.20,
+      grille: { w: 1.22, hf: 0.34, yf: 0.62, kind: 'egg' },
+      headlight: { w: 0.32, h: 0.22, yf: 0.74, inset: 0.20, kind: 'wrap' },
+      taillight: { w: 0.20, h: 0.34, yf: 0.52, inset: 0.14, kind: 'vertical' },
+      exhaust: { n: 1, r: 0.05, x: 0.6, y: 0.30 },
+      mirror: { z: 1.50, y: 1.34, x: 1.16, size: 0.18, arm: 0.20 },
+      spoiler: 'none',
+      /** The bed. See `pickupBed` in body.js — smooth walls, a rail, a tailgate. */
+      bed: { wallH: 0.40, frontZ: 0.02 },
+      // One shutline: a single-cab door runs from it to the A-pillar.
+      doorSplit: [1.42],
+      // No side glass behind the cab — the bed is open.
+      sideWindowEnd: 0.60,
+    },
+  },
+
+  /* --------------------------------------------------------- suv ---- */
+  /**
+   * ──────────────────────────────────────────────────────────────────────
+   * THE OVERLOOK — CARSON'S CAR. A BOXY BODY-ON-FRAME SUV.
+   * ──────────────────────────────────────────────────────────────────────
+   * The player supplied a white Toyota 4Runner: a tall two-box wagon, a
+   * near-vertical windscreen and tailgate, a long flat roof with rails, a big
+   * upright grille, chunky arches and a raised stance. The van is the only tall
+   * class in the fleet and it is the wrong tall — a one-box panel van with a
+   * windowless cargo box, no hood and no rear glass.
+   *
+   * So the SUV is a TWO-BOX, and it is built on the ordinary car station path
+   * (not `boxBody`), which gives a real hood and a full greenhouse for free. The
+   * SUV-ness is three authored facts, no new station code:
+   *
+   *   - the roof stays flat at `roofY` from the header nearly to the tail
+   *     (`roofRearZ` -2.05, against the sedan's -1.05) — a long boxy roof, not a
+   *     roof that falls to a boot.
+   *   - `tailY` is low (1.34) with `roofRearZ`/`backlightBaseZ` close together, so
+   *     the roof-to-tail drop is a short, near-vertical backlight over a vertical
+   *     tailgate rather than a raked fastback sweep.
+   *   - `roofRails: true` lays two rails down the roof edges (see body.js), the
+   *     detail nobody names but everybody reads as "SUV".
+   *
+   * White, and only white (`runnerwhite`). Carson's accent (`#7bf0d8`, teal) is
+   * the caliper. Dynamics: 2.2 t, RWD, tall CoM, soft long-travel springs and
+   * anti-roll bars deliberately left a little soft so it leans like a truck.
+   */
+  suv: {
+    id: 'suv',
+    name: 'Overlook',
+    kind: 'car',
+    seats: 4,
+    doors: 4,
+    dims: { L: 4.98, W: 2.14, H: 1.93 },
+    mass: 2200,
+    comY: 0.72,
+    /**
+     * 42% on the front axle — rear-biased for RWD traction, like the van. A
+     * short-wheelbase SUV transfers a lot of weight off the driven rear when it
+     * reverses UP a bank, so it needs the static rear load to climb one at all.
+     */
+    comZ: 0.42,
+    wheelbase: 2.88,
+    trackF: 1.68, trackR: 1.68,
+    /** Carson's accent (`#7bf0d8`, teal) on the calipers. See `build.js`. */
+    wheel: { radius: 0.40, width: 0.26, rimFrac: 0.58, spokes: 6, style: 'split', caliper: 0x7bf0d8 },
+    drive: 'rwd',
+    susp: {
+      travel: 0.24, rideHeight: 0.20,
+      freqF: 1.45, freqR: 1.55,
+      dampF: 0.36, dampR: 0.34,
+      reboundScale: 1.4,
+      arbF: 13000, arbR: 7000,
+      camberF: -0.006, camberR: 0,
+      toeF: 0.0015, toeR: 0.0015,
+    },
+    tyre: { ...TYRE_ROAD, muLong: 1.28, muLat: 1.20, relax: 0.52, loadSens: 0.11 },
+    engine: {
+      // 4.0 V6, ~270 hp. A body-on-frame six, not a hot motor.
+      peakTorque: 600, peakRpm: 3600, redline: 5600, idle: 720,
+      inertia: 0.5, friction: 0.07, brakeTorque: 56,
+    },
+    gearbox: {
+      // A deep reverse (like the van's) so it will still back UP a dirt bank.
+      gears: [-4.1, 0, 3.55, 2.10, 1.45, 1.12, 0.88],
+      final: 3.90, eff: 0.88,
+      shiftUp: 0.86, shiftDown: 0.42, shiftTime: 0.34,
+      autoClutchRpm: 1150,
+    },
+    diff: { lock: 0.3, preload: 60 },
+    brakes: { front: 3200, rear: 2100, handbrake: 2600, bias: 0.58 },
+    steer: { max: 0.5, speedFalloff: 0.66, rate: 3.2, returnRate: 4.2, counterAssist: 0.28 },
+    aero: { cd: 0.44, area: 3.4, downF: 0, downR: 0, yawDrag: 5.5 },
+    body: { hp: 1350, crumple: 0.9 },
+    paints: ['runnerwhite'],
+    style: {
+      shape: 'suv',
+      groundY: 0.20,
+      roofY: 1.92,
+      beltY: 1.04,
+      sillY: 0.52,
+      shoulderY: 0.92,
+      hwMax: 1.07,
+      noseY: 1.08, noseHw: 1.02, noseZ: 2.44,
+      /**
+       * A LOW, HIGH TAIL. `tailY` 1.34 is the top of the tailgate; the roof is
+       * 0.58 m above it and `roofRearZ`/`backlightBaseZ` are only 0.23 m apart in
+       * z, so the drop is a near-vertical rear — a tailgate, not a fastback.
+       */
+      tailY: 1.34, tailHw: 1.03, tailZ: -2.46,
+      cowlZ: 1.16, cowlY: 1.14,
+      /** A near-vertical windscreen: 0.50 m of run for 0.78 m of rise. */
+      windscreenTopZ: 0.66, roofRearZ: -2.05,
+      backlightBaseZ: -2.28,
+      // Boxy: little tumblehome, little roof taper, a nearly flat roof crown.
+      greenhouseInset: 0.075, greenhouseTaper: 0.045,
+      pillarA: 0.10, pillarB: 0.08, pillarC: 0.13,
+      archF: { z: 1.44, r: 0.50, flare: 0.052 },
+      archR: { z: -1.44, r: 0.52, flare: 0.056 },
+      crownDeck: 0.03, crownRoof: 0.045, crownBonnet: 0.05,
+      creaseY: 0.78, creaseDepth: 0.016,
+      bumperDrop: 0.16, splitter: 0, diffuser: 0,
+      bumperF: 0.22, bumperR: 0.22,
+      grille: { w: 1.16, hf: 0.30, yf: 0.56, kind: 'egg' },
+      headlight: { w: 0.34, h: 0.20, yf: 0.72, inset: 0.22, kind: 'wrap' },
+      taillight: { w: 0.20, h: 0.44, yf: 0.56, inset: 0.16, kind: 'vertical' },
+      exhaust: { n: 1, r: 0.05, x: 0.5, y: 0.30 },
+      mirror: { z: 1.02, y: 1.20, x: 1.12, size: 0.15, arm: 0.14 },
+      spoiler: 'none',
+      /** Two rails down the roof edges. See `roofRails` in body.js. */
+      roofRails: true,
+      doorSplit: [1.00, -0.18, -1.12],
+      sideWindowEnd: -1.96,
     },
   },
 };

@@ -45,13 +45,24 @@
  *                      Reproduces the lens sealed inside its own unlit housing
  *                      on EVERY car in the fleet, which is what it was.
  *   --control=coupe    two shutlines instead of three: the four-door test.
+ *   --control=slabroof build Carson's SUV as a low three-box saloon (roof
+ *                      dropped to 1.44 m, boot restored). The boxy tall-roof and
+ *                      near-vertical-rear assertions must all go red — this is
+ *                      the "SUV built as a sedan" control the assignment asks for.
+ *   --control=nobed    raise the pickup's bed floor to cab-roof height and drop
+ *                      the bed builder: no step down behind the cab, so the
+ *                      "it has a bed" assertions go red.
+ *   --control=repaint  paint every brother's car the WRONG hue (Dylan's K5 red,
+ *                      Aidan's Ranger white, Carson's 4Runner grey). The colour
+ *                      assertions go red; nothing else moves.
  *
  * Scores with the fix in and with each control out are in the header of the
  * summary. If a control does not go red, the assertion it targets is decorative.
  */
 
-import { VEHICLE_SPECS, finalizeSpec } from './specs.js';
+import { VEHICLE_SPECS, finalizeSpec, PAINTS } from './specs.js';
 import { buildCarBody } from './body.js';
+import { BOYZ } from '../game/data.js';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -161,16 +172,39 @@ function maxRise(E, top, zFrom, zTo) {
 /* Per-class measurement                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Negative controls, keyed by the class each one perturbs. Every one edits STYLE
+ * DATA only — no debug hook in the shipping path — and each reproduces a defect
+ * this fleet has actually shown or the assignment names explicitly. `repaint` is
+ * handled in the colour section (it is a paint fault, not a geometry one).
+ */
+const CONTROLS = {
+  notch: { id: 'kessel', apply: (s) => { s.ducktail = 0.30; } },
+  slab: { id: 'kessel', apply: (s) => { s.shape = 'sedan'; } },
+  buriedlamp: { id: 'kessel', apply: (s) => { s.taillight = { ...s.taillight, recess: -0.006 }; } },
+  coupe: { id: 'kessel', apply: (s) => { s.doorSplit = [0.64, -1.065]; } },
+  slabroof: {
+    id: 'suv',
+    apply: (s) => {
+      s.shape = 'sedan';
+      s.roofY = 1.44;
+      s.roofRearZ = -1.05;
+      s.backlightBaseZ = -1.52;
+      s.tailY = 0.94;
+      s.roofRails = false;
+    },
+  },
+  nobed: { id: 'pickup', apply: (s) => { s.tailY = s.roofY - 0.02; s.bed = null; } },
+  repaint: { id: null, apply: () => {} },
+};
+
+if (CONTROL && !CONTROLS[CONTROL]) throw new Error(`unknown control ${CONTROL}`);
+
 function styleOf(id) {
   const src = VEHICLE_SPECS[id];
   const spec = { ...src, style: { ...src.style } };
-  if (id !== 'kessel' || !CONTROL) return finalizeSpec(spec);
-  const s = spec.style;
-  if (CONTROL === 'notch') s.ducktail = 0.30;
-  else if (CONTROL === 'slab') s.shape = 'sedan';
-  else if (CONTROL === 'buriedlamp') s.taillight = { ...s.taillight, recess: -0.006 };
-  else if (CONTROL === 'coupe') s.doorSplit = [0.64, -1.065];
-  else throw new Error(`unknown control ${CONTROL}`);
+  const c = CONTROL ? CONTROLS[CONTROL] : null;
+  if (c && c.id === id) c.apply(spec.style, spec);
   return finalizeSpec(spec);
 }
 
@@ -279,6 +313,85 @@ function lampProud(out, tailZ) {
 const K = measure('kessel');
 const S = measure('sedan');
 const P = measure('sports');
+const PU = measure('pickup');
+const SUV = measure('suv');
+
+/* ------------------------------------------------------------------ */
+/* Archetype metrics — read off the EMITTED side elevation             */
+/* ------------------------------------------------------------------ */
+
+/** Highest emitted top-line y with its z between zLo and zHi, or -Inf. */
+function maxTopIn(m, zLo, zHi) {
+  let mx = -Infinity;
+  for (let x = 0; x < m.all.W; x++) {
+    const z = m.all.zOf(x);
+    if (z < zLo || z > zHi) continue;
+    const y = m.top[x];
+    if (!Number.isNaN(y) && y > mx) mx = y;
+  }
+  return mx;
+}
+
+/** Rearmost z at which any glass is emitted (the back edge of the glasshouse). */
+function rearmostGlassZ(m) {
+  for (let x = 0; x < m.glass.W; x++) {
+    for (let y = 0; y < m.glass.H; y++) {
+      if (m.glass.grid[y * m.glass.W + x]) return m.glass.zOf(x);
+    }
+  }
+  return NaN;
+}
+
+/**
+ * How far (in z) the top line falls from the roof peak before it has dropped by
+ * `drop` metres, walking away from the crest. A near-vertical windscreen or
+ * tailgate returns a SMALL number; a fastback sweep or a long bonnet a large
+ * one. `dir` is -1 to walk aft (rear), +1 to walk forward (front).
+ */
+function faceRun(m, fromZ, dir, drop = 0.20) {
+  const peak = m.peak;
+  const target = peak - drop;
+  let run = 0;
+  for (let x = 0; x < m.all.W; x++) {
+    const z = m.all.zOf(x);
+    if (dir < 0 && z > fromZ) continue;   // aft of the rear crest only
+    if (dir > 0 && z < fromZ) continue;   // forward of the front crest only
+    const y = m.top[x];
+    if (Number.isNaN(y)) continue;
+    if (y <= target) {
+      const d = Math.abs(z - fromZ);
+      if (run === 0 || d < run) run = d;
+    }
+  }
+  return run;
+}
+
+/** The pickup: cab-roof peak, bed-wall top, and the step between them. */
+function bedMetrics(m) {
+  const st = m.st;
+  const cabTop = maxTopIn(m, st.backlightBaseZ, st.cowlZ + 0.3); // over the cab
+  const bedTop = maxTopIn(m, st.tailZ + 0.15, st.backlightBaseZ - 0.15); // over the bed
+  return {
+    cabTop,
+    bedTop,
+    step: cabTop - bedTop,
+    bedLen: st.backlightBaseZ - st.tailZ,
+    rearGlassZ: rearmostGlassZ(m),
+  };
+}
+
+/** The SUV: how long the roof runs flat and how steep its two ends are. */
+function suvMetrics(m) {
+  return {
+    roofH: m.peak,
+    roofRun: m.crest, // length within 8 mm of the peak — the flat roof
+    rearRun: faceRun(m, m.crestR ?? m.st.roofRearZ, -1, 0.20),
+    frontRun: faceRun(m, m.crestF ?? m.st.windscreenTopZ, +1, 0.20),
+  };
+}
+
+const PUm = bedMetrics(PU);
+const SUVm = suvMetrics(SUV);
 
 console.log(`shapeprobe${CONTROL ? `  [CONTROL: ${CONTROL}]` : ''}`);
 console.log('');
@@ -363,6 +476,100 @@ for (const id of ['kessel', 'sedan']) {
   const n = (sp.style.doorSplit ?? []).length;
   ok(`${id} declares ${sp.doors} doors and cuts ${n} shutlines`,
     sp.doors < 4 || n >= 3, `${n} shutlines`);
+}
+
+/* ---- 6. THE PICKUP: A CAB AND AN OPEN BED ------------------------ */
+// Aidan's Ranger is a cab plus a separate bed box. The signature is the STEP:
+// the top line is high over the cab and drops to the bed walls behind it, and
+// the glasshouse stops at the cab so the bed is open. All read off the emitted
+// side elevation — the bed walls are real paint geometry in the raster.
+console.log('');
+console.log('pickup');
+{
+  const L = PU.spec.dims.L;
+  if (VERBOSE) {
+    console.log(`  cabTop ${PUm.cabTop.toFixed(2)}  bedTop ${PUm.bedTop.toFixed(2)}  ` +
+      `step ${PUm.step.toFixed(2)}  bedLen ${PUm.bedLen.toFixed(2)}  rearGlassZ ${PUm.rearGlassZ.toFixed(2)}`);
+  }
+  ok('pickup steps down from cab to bed', PUm.step > 0.30,
+    `${(PUm.step * 1000).toFixed(0)} mm cab->bed (want > 300; the SUV, one box, is ${((SUV.peak - maxTopIn(SUV, SUV.st.tailZ + 0.15, SUV.st.tailZ + 0.6)) * 1000).toFixed(0)})`);
+  ok('pickup bed is a long open box', PUm.bedLen / L > 0.40,
+    `bed ${PUm.bedLen.toFixed(2)} m = ${((PUm.bedLen / L) * 100).toFixed(0)}% of L (want > 40%)`);
+  ok('pickup glasshouse stops at the cab', PUm.rearGlassZ > PU.st.backlightBaseZ - 0.20,
+    `rear glass z ${PUm.rearGlassZ.toFixed(2)} (bed opens at ${PU.st.backlightBaseZ.toFixed(2)})`);
+}
+
+/* ---- 7. THE SUV: A TALL BOXY TWO-BOX ----------------------------- */
+// Carson's 4Runner is tall, its roof runs long and flat, and both ends are
+// near-vertical. `roofRun` is the length of top line within 8 mm of the peak —
+// a sedan's is ~1 m, a fastback's ~0.15 m, an SUV's the length of its roof.
+// `rearRun`/`frontRun` are how far the line has to travel to fall 20 cm off the
+// peak: small means steep, which is a windscreen and a tailgate, not a sweep.
+console.log('');
+console.log('suv');
+{
+  const L = SUV.spec.dims.L;
+  const ratio = SUVm.roofH / L;
+  const kesselRear = faceRun(K, K.crestR ?? K.st.roofRearZ, -1, 0.20);
+  if (VERBOSE) {
+    console.log(`  roofH ${SUVm.roofH.toFixed(2)}  roofH/L ${ratio.toFixed(3)}  ` +
+      `roofRun ${SUVm.roofRun.toFixed(2)}  rearRun ${SUVm.rearRun.toFixed(2)}  frontRun ${SUVm.frontRun.toFixed(2)}`);
+  }
+  ok('suv roof is in the SUV height band', ratio > 0.34,
+    `roofH/L ${ratio.toFixed(3)} (want > 0.34; sedan ${(S.roofH / S.spec.dims.L).toFixed(3)})`);
+  ok('suv roof runs long and flat', SUVm.roofRun > 1.6,
+    `flat roof ${SUVm.roofRun.toFixed(2)} m (want > 1.6; sedan ${S.crest.toFixed(2)}, kessel ${K.crest.toFixed(2)})`);
+  ok('suv rear is near-vertical (a tailgate, not a sweep)', SUVm.rearRun > 0 && SUVm.rearRun < 0.55,
+    `${(SUVm.rearRun * 100).toFixed(0)} cm of run for a 20 cm drop (want < 55; kessel sweep ${(kesselRear * 100).toFixed(0)})`);
+  ok('suv front screen is steep', SUVm.frontRun > 0 && SUVm.frontRun < 0.90,
+    `${(SUVm.frontRun * 100).toFixed(0)} cm of run for a 20 cm drop (want < 90)`);
+}
+
+/* ---- 8. HERO COLOURS + WIRING ------------------------------------ */
+// The three brothers' cars must be grey / red / white, and the right archetype
+// must be wired to the right brother. Colour is resolved through the SAME pool
+// the spawner reads (`spec.paints` -> `PAINTS`), classified by HSL family, so a
+// mis-wired pool or a repaint fails. Geometry is already gated by sections 1-7,
+// which measure the emitted `kessel` / `pickup` / `suv` directly; here we only
+// confirm each brother is pointed at the class that owns that geometry.
+console.log('');
+console.log('hero colours + wiring');
+function toHSL(hex) {
+  const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const l = (mx + mn) / 2;
+  const s = d === 0 ? 0 : l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  let h = 0;
+  if (d !== 0) {
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return { h, s, l };
+}
+function family(hex) {
+  const { h, s, l } = toHSL(hex);
+  if (s < 0.15 && l > 0.72) return 'white';
+  if (s < 0.20 && l >= 0.30 && l <= 0.72) return 'grey';
+  if ((h >= 340 || h <= 22) && s > 0.35 && l >= 0.20 && l <= 0.62) return 'red';
+  return 'other';
+}
+const CAR = { dylan: 'kessel', aidan: 'pickup', carson: 'suv' };
+const WANT = { dylan: 'grey', aidan: 'red', carson: 'white' };
+// The repaint control: each brother's car in a plausible but WRONG hue.
+const WRONG = { dylan: 0xa72c22, aidan: 0xdedcd6, carson: 0x828890 };
+for (const b of ['dylan', 'aidan', 'carson']) {
+  const carId = BOYZ[b].car;
+  ok(`${b} drives the ${CAR[b]}`, carId === CAR[b], `car = ${carId}`);
+  const sp = VEHICLE_SPECS[carId];
+  let colors = [];
+  for (const pn of sp.paints ?? ['common']) for (const p of PAINTS[pn] ?? []) colors.push(p.color);
+  if (CONTROL === 'repaint') colors = [WRONG[b]];
+  const fams = colors.map(family);
+  ok(`${b}'s ${carId} is painted ${WANT[b]}`, colors.length > 0 && fams.every((f) => f === WANT[b]),
+    `${colors.map((c) => '0x' + c.toString(16)).join(',')} -> ${fams.join(',')} (want ${WANT[b]})`);
 }
 
 console.log('');

@@ -1640,6 +1640,16 @@ function buildDetails(spec, surface, out, C, lod) {
     out.trim.push(...flatbed(spec));
   }
 
+  // ---- pickup bed --------------------------------------------------------
+  if (s.bed) {
+    pickupBed(spec, out);
+  }
+
+  // ---- roof rails --------------------------------------------------------
+  if (s.roofRails) {
+    out.trim.push(...roofRails(spec, surface, C));
+  }
+
   // ---- exhaust stack -----------------------------------------------------
   if (s.exhaust?.stack) {
     const e = s.exhaust;
@@ -1687,5 +1697,98 @@ function flatbed(spec) {
   const tg = roundedBox(hw * 2, f.sideH, 0.06, 0.012, 1);
   transform(tg, { pos: [0, f.deckY + f.sideH / 2 + 0.05, f.z0] });
   parts.push(tg);
+  return parts;
+}
+
+/**
+ * The open cargo bed of a compact PICKUP.
+ *
+ * Unlike `flatbed` — a stake deck bolted to a lorry — this is a smooth-walled
+ * bed box that reads as a Ranger, not a farm truck. The bed FLOOR is already
+ * there: with `tailY` set low the lofted body behind the cab settles to a flat
+ * deck, and that deck IS the floor. This builder only raises the walls on it —
+ * two body-coloured side panels with a dark capping rail, a front bulkhead
+ * against the cab and a drop tailgate — plus a dark liner so the open box reads
+ * as a floor rather than a slab top.
+ *
+ * All z come from the FINALISED style (`finalizeStyle` has already slid the tail
+ * and backlight onto the real axle geometry), so the bed lands exactly where the
+ * lofted deck does.
+ */
+function pickupBed(spec, out) {
+  const s = spec.style;
+  const zRear = s.tailZ + 0.03;
+  const zFront = s.backlightBaseZ - 0.03;
+  const len = zFront - zRear;
+  if (len < 0.5) return; // no room for a bed — leave the body as lofted
+  const wallH = s.bed?.wallH ?? 0.38;
+  const wallX = s.hwMax * 0.94;
+  const floorY = s.tailY;
+  const zMid = (zRear + zFront) * 0.5;
+  const topY = floorY + wallH;
+  const paint = [];
+  const trim = [];
+  for (const side of [-1, 1]) {
+    // Outer skin wall, dropped a little below the floor so its base overlaps the
+    // lofted deck edge with no seam.
+    const wall = roundedBox(0.05, wallH + 0.06, len, 0.012, 1);
+    transform(wall, { pos: [side * (wallX - 0.025), floorY + wallH * 0.5 - 0.03, zMid] });
+    paint.push(wall);
+    // Dark capping rail along the top of each wall.
+    const rail = roundedBox(0.09, 0.045, len, 0.014, 1);
+    transform(rail, { pos: [side * (wallX - 0.03), topY, zMid] });
+    trim.push(rail);
+  }
+  // Front bulkhead against the cab and the drop tailgate at the rear.
+  const bh = roundedBox(wallX * 2, wallH + 0.06, 0.06, 0.012, 1);
+  transform(bh, { pos: [0, floorY + wallH * 0.5 - 0.03, zFront] });
+  paint.push(bh);
+  const tg = roundedBox(wallX * 2, wallH, 0.06, 0.012, 1);
+  transform(tg, { pos: [0, floorY + wallH * 0.5, zRear] });
+  paint.push(tg);
+  // Bed liner: a dark floor plane just proud of the deck.
+  const floor = roundedBox(wallX * 2 - 0.03, 0.03, len - 0.04, 0.008, 1);
+  transform(floor, { pos: [0, floorY + 0.03, zMid] });
+  out.cavity.push(floor);
+  out.paint.push(...paint);
+  out.trim.push(...trim);
+}
+
+/**
+ * Roof rails — two rails down the edges of an SUV roof, and the detail nobody
+ * names but everybody reads as "that is an SUV". They follow the roof edge
+ * column of the emitted surface, so they hug the roofline through its crown, and
+ * sit a hair proud of the skin on short legs.
+ */
+function roofRails(spec, surface, C) {
+  const s = spec.style;
+  const parts = [];
+  const zF = s.windscreenTopZ - 0.06;
+  const zR = s.roofRearZ + 0.06;
+  if (zF - zR < 0.4) return parts;
+  const n = 10;
+  const cR = Math.round(C(CP.ROOF_EDGE));
+  for (const side of [-1, 1]) {
+    const path = [];
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const z = zF + (zR - zF) * t;
+      const prof = surface.profileAt(z);
+      const ci = Math.max(0, Math.min(surface.cols - 1, cR));
+      path.push(new THREE.Vector3(side * (prof[ci].x - 0.05), prof[ci].y + 0.03, z));
+    }
+    const rail = sweep(
+      [{ x: 0.020, y: 0.018 }, { x: 0.020, y: -0.018 }, { x: -0.020, y: -0.018 }, { x: -0.020, y: 0.018 }],
+      path,
+      { closed: true, caps: true, up: new THREE.Vector3(1, 0, 0) }
+    );
+    parts.push(rail);
+    for (let i = 1; i < n - 1; i += 3) {
+      const p = path[i];
+      const leg = roundedBox(0.03, 0.045, 0.03, 0.006, 1);
+      transform(leg, { pos: [p.x, p.y - 0.028, p.z] });
+      parts.push(leg);
+    }
+  }
   return parts;
 }
