@@ -75,7 +75,12 @@
  *     steps PASS · containment 7.79% -> 7.76% PASS
  *   node src/world/drivesweep.mjs --nocapfix     the drive-surface coverage
  *     fix reverted (union cap + full collision mouth): holes 258.0 m -> 399.6 m
- *     FAIL against the <= 300 ratchet · steps and containment stay green
+ *     FAIL against the ratchet · steps and containment stay green
+ *   node src/world/drivesweep.mjs --nonotchfix   the junction NOTCH FILL reverted
+ *     (collision pad is the bare union of its arms again): holes 29.4 m -> 258.0 m
+ *     FAIL against the <= 40 ratchet · 4+-arm holes 2 -> 366 FAIL · steps
+ *     9305 -> 9868 and containment 8.03% -> 7.96% (both still green, so the fill
+ *     is what closes the wedges and nothing else leans on it)
  *   node src/world/drivesweep.mjs --nokerbfix    the kerb-containment fix reverted
  *     containment 7.79% -> 10.28% FAIL · holes, steps and junction all PASS
  *     unchanged
@@ -120,10 +125,10 @@ const VERBOSE = !!args.verbose;
  * every lane centre and every lane edge `roads.laneCenter` hands out. Before
  * this pass / after it:
  *
- *   holes        16 780.8 m -> 258.0 m   9301 runs -> 89, worst 19.2 -> 12.0 m
- *   steps        12 833 -> 9839          (see below: the measure changed too)
- *   junction     6256 lines -> 3579      6984 unsupported samples -> 795
- *   containment  11.75% -> 7.87%
+ *   holes        16 780.8 m -> 29.4 m    9301 runs -> 9, worst 19.2 -> 9.0 m
+ *   steps        12 833 -> 9305          (see below: the measure changed too)
+ *   junction     6256 lines -> 3643      6984 unsupported samples -> 662
+ *   containment  11.75% -> 8.03%
  *
  * The step from 399.6 m to 258.0 m (and the incidental fall in steps and
  * junction) is the junction DRIVE-SURFACE coverage pass in `roadmesh._junction`
@@ -135,21 +140,25 @@ const VERBOSE = !!args.verbose;
  * orphaning a wedge of a wide-short arm's own carriageway (node 16's 4-lane
  * arterial had a 60-degree mouth cut to 24 by a narrow neighbour 48 away).
  *
+ * The step from 258.0 m to 29.4 m is the junction NOTCH FILL in
+ * `roadmesh._node` — see `noNotchFix()` there and the `--nonotchfix` control
+ * below. The pad the coverage pass builds is still only the UNION of its arms, a
+ * plus/cross of asphalt with an empty wedge in every corner two arms splay
+ * apart; 366 of the 430 surviving holes fell in one. The fill closes each wedge
+ * with a collision-only centre-fan triangle across the convex hull of the arm
+ * mouth corners, and took the 4+-arm holes to 2. It cost nothing elsewhere:
+ * steps FELL 9868 -> 9305 and containment rose 7.96% -> 8.03% (well inside its
+ * ratchet), because the wedges near a junction mouth are now paved.
+ *
  * WHAT IS LEFT, AND WHOSE IT IS. Measured, not guessed:
  *
- *   holes 258.0 m   366 of the 430 samples are still at nodes with four or more
- *                   arms, and 421 of 430 are inside a junction pad. What remains
- *                   is the RE-ENTRANT NOTCH where two carriageways cross: the
- *                   union of the arms is the true outline of the crossing, and a
- *                   lane the graph hands out through the notch corner has no
- *                   asphalt because no asphalt belongs there. Closing these
- *                   means either a rounded kerb corner OUTSIDE the notch
- *                   (content work — `roadmesh._place`'s note says so) or a
- *                   `netgen` change so `laneCenter` stops routing a lane across
- *                   the notch. The worst offenders are short quay/parkway edges
- *                   whose inset is scaled down by `_insetAt`, giving the wide
- *                   mouths — a corridor-layout question, not a meshing one
- *   steps 10 241    8952 are inside a junction pad and 1289 mid-run. The mid-run
+ *   holes 29.4 m    only 2 of the 49 remaining samples are at a 4+ node; the
+ *                   rest are 38 at a T and 9 at a bend, thin slivers where a lane
+ *                   the graph hands out through a corner grazes the pad edge. All
+ *                   are inside a junction pad, none mid-run. Closing them further
+ *                   is a `netgen` question — a lane routed a few cm outside the
+ *                   crossing — not a meshing one
+ *   steps 9305      8045 are inside a junction pad and 1260 mid-run. The mid-run
  *                   ones are NOT an emission defect: they are hillside
  *                   switchbacks where `netgen` lays two legs of ONE corridor
  *                   over each other a couple of metres apart in height —
@@ -157,8 +166,8 @@ const VERBOSE = !!args.verbose;
  *                   between its own legs. That is a corridor-layout question
  *                   for `netgen`, not a `roadmesh` one, and it is the single
  *                   biggest remaining number in this file
- *   containment     7709 samples with no lip. Of those, 810 are CORRECT (the
- *   7.79%           ground outboard is another edge's drivable lane and a kerb
+ *   containment     7973 samples with no lip. Of those, 847 are CORRECT (the
+ *   8.03%           ground outboard is another edge's drivable lane and a kerb
  *                   there is a kerb in the road) and 4136 are cancelled by the
  *                   lane of an edge that SHARES A NODE with the one laying the
  *                   kerb — a street's own continuation round a bend. `footPaved`
@@ -173,10 +182,22 @@ const VERBOSE = !!args.verbose;
  * 11 m to 2 m doubles the collision triangle count (818k -> 1570k) and moves
  * containment 7.80% -> 7.13%. Row pitch is not the problem.
  */
-const MAX_HOLE_M = Number(args.maxhole ?? 300);
+const MAX_HOLE_M = Number(args.maxhole ?? 40);
 const MAX_STEPS = Number(args.maxsteps ?? 10600);
 const MAX_JUNCTION_BAD = Number(args.maxjunc ?? 4100);
 const MAX_UNCONTAINED_PCT = Number(args.maxuncontained ?? 8.2);
+/**
+ * RATCHET (rule 13). Hole samples at a node with FOUR OR MORE arms. This is the
+ * assertion the junction NOTCH FILL is proved against: the pad was the bare
+ * union of its arms, an empty wedge in every corner two arms splay apart, and
+ * 366 of the 430 surviving hole samples fell in one. Filling the wedges (the
+ * convex hull of the arm mouth corners, collision-only — `roadmesh._node`, and
+ * the `--nonotchfix` control below) took it to 2. The measure is INDEPENDENT of
+ * the fill: it is a downward ray at a `laneCenter` point finding no emitted
+ * collision, bucketed by the nearer node's graph degree, exactly as the hole
+ * assertion above buckets it.
+ */
+const MAX_JUNC4_HOLES = Number(args.maxjunc4 ?? 20);
 /**
  * RATCHET (rule 13). Total degree-1 stubs near a landmark that never welded to
  * its ring — the "roads not lining up" complaint at its source, since a stub is
@@ -238,6 +259,7 @@ try {
   if (args.nokerbfix) extra += '&nokerbfix=1';
   if (args.nopadfix) extra += '&nopadfix=1';
   if (args.nocapfix) extra += '&nocapfix=1';
+  if (args.nonotchfix) extra += '&nonotchfix=1';
   if (args.noringweld) extra += '&noringweld=1';
   await page.goto(`http://127.0.0.1:${PORT}/?capture=1&lockstep=1&prewarm=0&q=high${extra}`, {
     waitUntil: 'domcontentloaded',
@@ -292,6 +314,13 @@ check(
   `${R.holeM.toFixed(1)} m of lane line (RATCHET <= ${MAX_HOLE_M}) stands on no road collision at all ` +
     `— ${R.holeSamples} of ${R.samples} samples, ${R.holeRuns} runs, worst ${R.worstHole.toFixed(1)} m` +
     fmt(R.holeWorst)
+);
+check(
+  R.diag.holeDeg[3] <= MAX_JUNC4_HOLES,
+  'a 4+-arm crossing is filled across',
+  `${R.diag.holeDeg[3]} hole samples (RATCHET <= ${MAX_JUNC4_HOLES}) at nodes with four or more arms — ` +
+    `the re-entrant wedges of a junction pad, where the union of the arms leaves the corner empty ` +
+    `(dead-end ${R.diag.holeDeg[0]} · bend ${R.diag.holeDeg[1]} · T ${R.diag.holeDeg[2]} · 4+ ${R.diag.holeDeg[3]})`
 );
 check(
   R.stepN <= MAX_STEPS,

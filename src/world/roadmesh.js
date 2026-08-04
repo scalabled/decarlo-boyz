@@ -271,6 +271,44 @@ function legacyCap() {
 }
 
 /**
+ * A/B hatch for the junction NOTCH FILL — the negative control for the 4+-arm
+ * hole assertion in `src/world/drivesweep.mjs`. `?nonotchfix=1`, or
+ * `OW_NO_NOTCH_FIX=1` headless, reverts the wedge fill so the COLLISION pad is
+ * the bare union of its arms again.
+ *
+ * The union cap + full collision mouth (`legacyCap`) got the drive surface to
+ * follow each arm's own carriageway, but the pad it builds is still only the
+ * UNION of the arms — a plus/cross of asphalt with an EMPTY WEDGE in every
+ * corner where two arms splay apart. At a 4+-arm crossing those wedges are the
+ * bulk of the junction area, and a lane the graph routes through a corner (or a
+ * car cutting one) drops straight through the re-entrant notch into the terrain
+ * `netgen` sinks below the tarmac. MEASURED with `drivesweep`: 366 of 430 hole
+ * samples were at 4+-arm nodes, every one inside a junction pad.
+ *
+ * The fill is collision-only and geometry-free: the boundary ring is already
+ * the arm mouth corners, so the CONVEX HULL of that ring is the true outline of
+ * the crossing. Each hull edge that skips a re-entrant boundary point spans a
+ * notch, and one centre-fan triangle across it covers the wedge. A downward ray
+ * finds the top surface, so this double coverage over the union is harmless; it
+ * never touches the visible pad, which keeps its exact union outline.
+ */
+let _noNotchFix = null;
+function noNotchFix() {
+  if (_noNotchFix !== null) return _noNotchFix;
+  _noNotchFix = false;
+  try {
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('nonotchfix') === '1') {
+      _noNotchFix = true;
+    }
+  } catch { /* no location */ }
+  try {
+    if (typeof process !== 'undefined' && process?.env?.OW_NO_NOTCH_FIX === '1') _noNotchFix = true;
+  } catch { /* no process */ }
+  if (_noNotchFix) console.warn('[world] JUNCTION NOTCH FILL DISABLED — the collision pad is the bare union of its arms again');
+  return _noNotchFix;
+}
+
+/**
  * A/B hatch for the hole fix, and the negative control for
  * `src/physics/walksweep.mjs`. `?nogapfix=1`, or `OW_NO_GAP_FIX=1` headless,
  * puts back the two things that dug the trench: the suppressed footway strip
@@ -1833,9 +1871,11 @@ class SectorBuild {
     const inA = this._padIn ?? (this._padIn = []);
     const outA = this._padOut ?? (this._padOut = []);
     const colOut = this._padCol ?? (this._padCol = []);
+    const colPos = this._padColPos ?? (this._padColPos = []);
     inA.length = 0;
     outA.length = 0;
     colOut.length = 0;
+    colPos.length = 0;
     const cc = vis ? 0 : this.col.vert(n.x, n.y + 0.03, n.z, 0, 1, 0, 0, 0);
     for (let i = 0; i < N; i++) {
       const s = ring[i];
@@ -1854,6 +1894,7 @@ class SectorBuild {
         outA.push(road.vert(ox, oy + 0.004, oz, 0, 1, 0, ox * 0.18, oz * 0.18, 0, go, 0.12));
       } else {
         colOut.push(this.col.vert(ox, oy, oz, 0, 1, 0, 0, 0));
+        colPos.push(ox, oz, i);
       }
     }
     for (let i = 0; i < N; i++) {
@@ -1862,6 +1903,26 @@ class SectorBuild {
         road.faceTri(c, inA[i], inA[j], 0, 1, 0);
         road.faceQuad(inA[i], outA[i], outA[j], inA[j], 0, 1, 0);
       } else {
+        this.col.faceTri(cc, colOut[i], colOut[j], 0, 1, 0);
+      }
+    }
+    // --- notch fill: close the re-entrant wedges of a 4+-arm crossing ------
+    //
+    // The fan above is the bare UNION of the arms — a plus/cross with an empty
+    // wedge in every corner two arms splay apart. The CONVEX HULL of the ring
+    // is the true outline of the crossing; every hull edge that skips a ring
+    // point spans a notch the union necked past, and one centre-fan triangle
+    // across it carries collision over the wedge. Collision-only: a downward ray
+    // finds the top surface, so this double coverage over the union is harmless,
+    // and the visible pad keeps its exact union outline. See `noNotchFix`.
+    if (!vis && arms.length >= 3 && !noNotchFix()) {
+      const hull = convexHullIdx(colPos);
+      for (let h = 0; h < hull.length; h++) {
+        const i = hull[h];
+        const j = hull[(h + 1) % hull.length];
+        // A hull edge whose endpoints are adjacent on the ring is already a fan
+        // triangle; only the ones that skip ring points bridge a notch.
+        if (j === (i + 1) % N || i === (j + 1) % N) continue;
         this.col.faceTri(cc, colOut[i], colOut[j], 0, 1, 0);
       }
     }
@@ -1963,6 +2024,36 @@ class SectorBuild {
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+/**
+ * Convex hull (monotone chain) of `pts` — flat `[x, z, idx, x, z, idx, ...]` —
+ * returned as the list of `idx` in CCW order. Used to close the re-entrant
+ * notches of a junction pad: the hull is the true outline of the crossing, and
+ * the ring points the hull skips are exactly the ones a splayed corner necks in
+ * past. Degenerate inputs (< 3 distinct points) return every idx as given.
+ */
+function convexHullIdx(pts) {
+  const m = pts.length / 3;
+  if (m < 3) { const r = []; for (let i = 0; i < m; i++) r.push(pts[i * 3 + 2]); return r; }
+  const P = [];
+  for (let i = 0; i < m; i++) P.push([pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]]);
+  P.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [];
+  for (const p of P) {
+    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop();
+    lo.push(p);
+  }
+  const hi = [];
+  for (let i = P.length - 1; i >= 0; i--) {
+    const p = P[i];
+    while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop();
+    hi.push(p);
+  }
+  lo.pop();
+  hi.pop();
+  return lo.concat(hi).map((p) => p[2]);
 }
 
 /** An axis-aligned-ish box laid along a direction; used for sleepers. */
