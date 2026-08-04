@@ -111,7 +111,87 @@ export function hdrTarget(w, h, opts = {}) {
   return rt;
 }
 
-/** Float32 target — used for the transmittance LUT, where banding shows. */
-export function floatTarget(w, h, opts = {}) {
-  return hdrTarget(w, h, { type: THREE.FloatType, ...opts });
+/**
+ * Can this device RENDER INTO a 32-bit float colour target?
+ *
+ * Rendering into a float texture and sampling one are different capabilities,
+ * and WebGL2 grants the first only with 'EXT_color_buffer_float' — universal
+ * on desktop, missing on a great many mobile GPUs, which offer
+ * 'EXT_color_buffer_half_float' instead. Same capability gap, same fallback
+ * pattern as src/render/pass.js (rule 2 forbids importing it, so this file
+ * keeps its own tiny copy, like everything else in it).
+ *
+ * Nothing in this subsystem checked. The transmittance LUT was the sky's ONE
+ * Float32 colour target; on those devices its framebuffer came up incomplete,
+ * the bake wrote nothing, the texture sampled as zero, and every scattering
+ * term downstream multiplied through it — sky-view LUT black, ambient LUT
+ * black, dome black, sun disc gone. A player reported it from a phone as "the
+ * sky is black (with clouds)": the clouds survive because their ground-bounce
+ * term is plain CPU uniforms (cloudpass.js), which is what made this an
+ * atmosphere defect rather than a screen one. MEASURED by skyfallbackprobe on
+ * the emitted sky band at noon: control 83.7 mean luma, denied 4.3 with 99.2%
+ * of the band under 8.
+ *
+ * Cached per renderer — 'extensions.has' is a live GL query.
+ */
+const _floatOk = new WeakMap();
+function canRenderFloat(renderer) {
+  if (!renderer) return true; // nothing to ask: keep the old allocation
+  let v = _floatOk.get(renderer);
+  if (v === undefined) {
+    v = !!renderer.extensions?.has?.('EXT_color_buffer_float');
+    _floatOk.set(renderer, v);
+  }
+  return v;
+}
+const _halfOk = new WeakMap();
+function canRenderHalf(renderer) {
+  if (!renderer) return true;
+  let v = _halfOk.get(renderer);
+  if (v === undefined) {
+    v = !!(
+      renderer.extensions?.has?.('EXT_color_buffer_float') ||
+      renderer.extensions?.has?.('EXT_color_buffer_half_float')
+    );
+    _halfOk.set(renderer, v);
+  }
+  return v;
+}
+
+/**
+ * The widest float type this device can actually render into, for LUT-class
+ * targets whose payload fits in [0,1] (the transmittance LUT stores
+ * exp(-opticalDepth), so every channel is a transmittance). The ladder ends at
+ * 8-bit UNORM rather than at failure because the payload is representable
+ * there and a banded sky beats a black one; a device that can render into none
+ * of these cannot run the HDR pipeline at all, so an analytic-sky fallback
+ * behind that condition would be dead code guarding a frame that is already
+ * black everywhere.
+ *
+ * '?owSkyFloatLUT=1' reverts to the unconditional Float32 allocation — the
+ * pre-fix behaviour — so skyfallbackprobe.mjs can run its negative control
+ * against live code with no edit (the debugIgnorePause pattern). On a capable
+ * device the hatch and the capability check pick the same Float32, which is
+ * the probe's pixel-neutrality arm.
+ */
+export function lutFloatType(renderer) {
+  const force = typeof location !== 'undefined' && /[?&]owSkyFloatLUT=1/.test(location.search);
+  if (force || canRenderFloat(renderer)) return THREE.FloatType;
+  const t = canRenderHalf(renderer) ? THREE.HalfFloatType : THREE.UnsignedByteType;
+  console.info(
+    '[sky] no EXT_color_buffer_float — LUT falls back to ' +
+      (t === THREE.HalfFloatType ? 'half float' : '8-bit')
+  );
+  return t;
+}
+
+/**
+ * Float target for the LUT bakes — Float32 where the device can render into it
+ * (the transmittance LUT is where banding would show), degrading per
+ * lutFloatType() where it cannot. The renderer parameter is load-bearing: an
+ * unconditional Float32 here is exactly the black-sky-on-mobile defect
+ * described above.
+ */
+export function floatTarget(renderer, w, h, opts = {}) {
+  return hdrTarget(w, h, { type: lutFloatType(renderer), ...opts });
 }

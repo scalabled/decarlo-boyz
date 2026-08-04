@@ -238,7 +238,13 @@ export class SkyLuts {
   constructor(renderer, shared) {
     this.renderer = renderer;
 
-    this.transmittanceRt = floatTarget(256, 64, { name: 'sky-transmittance' });
+    // Float32 where the device can render into it; half (or 8-bit UNORM — the
+    // payload is exp(-od), always in [0,1]) where it cannot. Allocating this
+    // unconditionally at Float32 was the black-sky-on-mobile defect: with
+    // EXT_color_buffer_float missing this framebuffer is incomplete, the
+    // texture samples as zero, and every LUT below multiplies through it.
+    // Gate: npm run skyfb (src/sky/skyfallbackprobe.mjs).
+    this.transmittanceRt = floatTarget(renderer, 256, 64, { name: 'sky-transmittance' });
     this.multiScatterRt = hdrTarget(32, 32, { name: 'sky-multiscatter' });
     // 384x192 rather than Hillaire's 192x108: one texel is then under a degree
     // of azimuth, which is the difference between a readable warm band around a
