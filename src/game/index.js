@@ -268,6 +268,12 @@ export class GameSystem {
         this.debugStage(stage, e.shot.gameOpts ?? {});
         this._followPlayer(e.shot);
       }),
+      // THE PLAYER HAS ENTERED THE CITY TO PLAY. `src/ui/boot.js`'s START (and
+      // its `skip()`) emit `ui:boot { phase:'play' }` the instant control is
+      // handed over — the one moment a first-time player is looking at the
+      // world for the first time. Begin his chapter here, which is what makes
+      // story mode legible: see `_onEnterWorld`.
+      ctx.events.on('ui:boot', (e) => this._onEnterWorld(e)),
       // The map pin is the player's. A mission borrows it and hands it back.
       ctx.events.on('ui:waypoint', (w) => {
         if (this.missions.running) return;
@@ -376,6 +382,45 @@ export class GameSystem {
     }
     ui?.notify?.(`${n.def.no} · ${n.def.name.toUpperCase()}`, 'PRESS J', 'slag');
     this._pendingChapter = n.index;
+  }
+
+  /**
+   * BEGIN STORY MODE — the fix for "I started as Aidan and nothing happened."
+   *
+   * `src/ui/boot.js`'s START enables control, shows the HUD and hands the clock
+   * back, then emits `ui:boot { phase:'play' }`. Before this listener, that was
+   * the whole handover: the chapter the brother is up to was only ARMED
+   * (`_pendingChapter`, and a "PRESS J" feed toast from `_announceNext`), never
+   * STARTED. A first-time player therefore landed in free roam with a blank
+   * objective panel and no waypoint, the toast already faded, with no way to
+   * know that `J` was the thing to press — and a respawn just put him back in
+   * the same silent free roam. The reference build (`legacy/babylon-reference.html`
+   * `runLoader` -> `startChapter(start)`) begins the chapter on entry instead,
+   * and so should we.
+   *
+   * So do exactly what pressing `J` would do, on the player's behalf, the moment
+   * he enters: start the chapter he is up to. The intro cutscene plays and hands
+   * off to the travel/run phase, at which point the mission runner and the track
+   * publish the objective line (`getHudState().objective`) and the world
+   * waypoint marker — the "get to the docks / get in the marked vehicle" call to
+   * action — from the first controllable frame.
+   *
+   * Guarded so it only ever fires on the real entry gesture, never over a
+   * mission that is already live (a staged debug entry, a resumed job) and never
+   * for a brother whose arc is finished — after the credits the job board owns
+   * the map and `_announceNext` has already pointed him at it.
+   *
+   * Only the live BootFlow emits `ui:boot`; every headless bench boots with the
+   * flow disabled (`bootEnabled()` is false under `navigator.webdriver`), so
+   * this changes nothing the playtest harness or any capture tool sees — it is
+   * purely the human's first-run path.
+   */
+  _onEnterWorld(e) {
+    if (e?.phase !== 'play') return;
+    if (this.missions.active) return;
+    const n = this.nextChapter();
+    if (!n) return;
+    this.startMission(n.index);
   }
 
   /**

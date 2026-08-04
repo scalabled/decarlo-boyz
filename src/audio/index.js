@@ -752,7 +752,7 @@ export class AudioSystem {
       if (sendLevel > 0.001) {
         sendNode = mkGain(this.actx, sendLevel);
         g.connect(sendNode);
-        sendNode.connect(this.mixer.reverbSend);
+        sendNode.connect(this.mixer.busSend(bus));
       }
       // Claim a bookkeeping slot; steal the oldest if all are busy.
       let slot = null;

@@ -334,7 +334,7 @@ export class SpatialField {
     const send = (opts.send ?? 0.25) * (0.5 + Math.min(dist, 90) * 0.022) * (1 + occ * 0.7);
     em.sendGain.gain.setValueAtTime(clamp(send, 0, 3), t);
 
-    em.connectOut(this.mixer.bus(em.busName), this.mixer.reverbSend);
+    em.connectOut(this.mixer.bus(em.busName), this.mixer.busSend(em.busName));
     return em;
   }
 

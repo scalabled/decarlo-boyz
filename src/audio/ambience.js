@@ -47,7 +47,7 @@ export class Ambience {
     // outside noise rather than a dead room.
     const sendTap = gain(actx, 0.22);
     outdoorGain.connect(sendTap);
-    sendTap.connect(this.mixer.reverbSend);
+    sendTap.connect(this.mixer.busSend('ambience'));
     this.nodes.push(sendTap);
 
     /* ---- wind: two decorrelated brown-noise layers ---------------- */

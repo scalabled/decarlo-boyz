@@ -88,7 +88,7 @@ function route(mixer, voice, busName = 'weapons', sendScale = 1) {
     const g = mixer.actx.createGain();
     g.gain.value = voice.send * sendScale;
     voice.node.connect(g);
-    g.connect(mixer.reverbSend);
+    g.connect(mixer.busSend(busName));
   }
   return voice;
 }

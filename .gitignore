@@ -6,7 +6,6 @@ tools/workflows/
 SESSION-REPORT.md
 REVIEW.md
 nodeonly.txt
---rect=*
 .DS_Store
 *.swp
 .idea/

@@ -644,8 +644,70 @@ export class VehicleSystem {
     return lod;
   }
 
-  despawn(v) {
+  /**
+   * Remove a vehicle from the world.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE ONE VEHICLE NOBODY MAY DESPAWN
+   * ──────────────────────────────────────────────────────────────────────────
+   * This is the single chokepoint EVERY cull path funnels through — `traffic`
+   * recycles a far car here, `props` streams a parked car out here, `police`
+   * retires a cruiser here, `game` tears a finished mission down here, the dev
+   * shot harness clears staged cars here. So the guard that protects the
+   * player's own car has to live HERE and not in each of those callers, because
+   * a guard that lives in the caller is a guard the next caller forgets — the
+   * bug that motivated this had five callers and a guard in three of them.
+   *
+   * TWO handles are pinned:
+   *
+   *   (a) THE VEHICLE THE PLAYER OCCUPIES. `player.vehicle` is set the instant
+   *       the enter sequence begins (`player/vehicle.js` `tryEnter`) and is not
+   *       cleared until the exit animation completes, so it is the authority on
+   *       "which car is the player in" across the WHOLE open/jack/in/drive/out
+   *       lifetime. Every despawner of a game-spawned mission vehicle was
+   *       instead trusting a per-caller guard keyed on `game.playerVehicle()`
+   *       (`mission.cleanup`, `characters._parkCar`) or a private `_playerCar`
+   *       (`traffic`), and `game.playerVehicle()` returns
+   *       `player?.inVehicle ? player.vehicle : null` — so it yields NULL the
+   *       moment `player` is unavailable (a scene teardown between chapters) or
+   *       the derived `inVehicle` flag is out of step with the seat, and the
+   *       guard then despawns the car out from under a seated player. Nothing
+   *       steps a handle that has left `this.vehicles`, so the car freezes;
+   *       `player/vehicle.js` reacts only to `.destroyed`, never to "streamed
+   *       out", so the player is left in a limbo seated state with
+   *       "LEAVE THE <car>" still on the HUD — the reported bug exactly. Keying
+   *       the guard off the vehicle handle + seat here, at the one point every
+   *       caller passes through, is strictly wider than any of those and cannot
+   *       be forgotten by the next caller. Measured live and in
+   *       `src/vehicles/despawnprobe.mjs`.
+   *
+   *   (b) ANY VEHICLE CARRYING AN ACTIVE MISSION TAG (`v.isMission`, set by
+   *       `game/mission.js` on everything `g.spawnVehicle(M, ...)` produces). A
+   *       cull may never take the delivery van, the escort ally or the chase
+   *       target while the job is live.
+   *
+   * `{ force: true }` bypasses (b) only — mission cleanup is the one caller that
+   * legitimately removes a mission vehicle, and it must still be refused a car
+   * the player is sitting in, so (a) holds even under force. `{ hard: true }`
+   * (full-system `dispose()`) bypasses both.
+   */
+  despawn(v, opts) {
     if (!v) return;
+    const o = opts === true ? { force: true } : (opts || {});
+    const hard = o.hard === true;
+    const force = hard || o.force === true;
+    // (a) NEVER rip the car out from under a seated player. Not even a forced
+    // mission teardown — the player exits first. Only a hard dispose overrides.
+    if (!hard && this._playerAboard(v)) {
+      if (!this._warnedOccupiedDespawn) {
+        this._warnedOccupiedDespawn = true;
+        console.warn('[vehicles] refused to despawn the vehicle the player occupies');
+      }
+      return;
+    }
+    // (b) A live mission vehicle survives every cull; only authorized teardown
+    // (mission cleanup, dispose) may remove it.
+    if (!force && v.isMission === true) return;
     const i = this.vehicles.indexOf(v);
     if (i >= 0) this.vehicles.splice(i, 1);
     const h = this._hidden?.indexOf(v) ?? -1;
@@ -656,6 +718,26 @@ export class VehicleSystem {
       if (v.damage?._cloned.has(p.mesh)) p.mesh.geometry.dispose();
     }
     for (const k in v.model.lampMats) v.model.lampMats[k].dispose();
+  }
+
+  /**
+   * Is the local player currently in `v` — climbing in, driving or climbing
+   * out? `player.vehicle` is the authority and is non-null across the whole
+   * sequence; the seat and occupant list are checked too so a frame where the
+   * player reference is momentarily out of step with the animation cannot open
+   * a hole.
+   */
+  _playerAboard(v) {
+    if (!v) return false;
+    if (v === this._playerVehicle()) return true;
+    if (v.driver && this._isPlayerActor(v.driver)) return true;
+    const occ = v.occupants;
+    if (Array.isArray(occ)) {
+      for (let i = 0; i < occ.length; i++) {
+        if (this._isPlayerActor(occ[i])) return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2442,7 +2524,7 @@ export class VehicleSystem {
     this.ctx?.events.off('weather:change', this._onWeather);
     this.ctx?.events.off('game:character', this._onHeroChange);
     this.ctx?.events.off('player:brother', this._onHeroChange);
-    for (const v of [...this.vehicles]) this.despawn(v);
+    for (const v of [...this.vehicles]) this.despawn(v, { hard: true });
     this.vehicles.length = 0;
     clearGeometryCache();
     this.mats?.dispose();

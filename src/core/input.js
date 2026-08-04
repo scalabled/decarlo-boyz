@@ -72,6 +72,18 @@ export class Input {
     /** Set true by capture mode so scripted shots aren't fought by real input. */
     this.frozen = false;
 
+    /**
+     * Optional predicate installed by `ui` (see `UiSystem.init`): while it
+     * returns true a UI modal owns the mouse and the pointer must NOT be
+     * grabbed. Null on headless benches and the model-preview page, where there
+     * is no UI and nothing is ever paused — so the grab keeps its old behaviour
+     * there. This is the one choke point EVERY lock request passes through, so a
+     * single check closes both traps this exists to fix: the window-level
+     * mousedown grab under a menu, and `menu.close()` re-locking on the way into
+     * the story overview.
+     */
+    this.pointerLockGuard = null;
+
     this.gamepadIndex = null;
     this.stick = { moveX: 0, moveY: 0, lookX: 0, lookY: 0 };
 
@@ -100,6 +112,22 @@ export class Input {
     this.canvas.addEventListener('contextmenu', this._bound.contextmenu);
   }
 
+  /**
+   * Give the mouse back. A window-level pointer lock survives an overlay
+   * opening (opening the map/story/phone with a keyboard shortcut does not
+   * click anything), so the cursor stays hidden and captured over a menu the
+   * player is trying to use. `ui._syncPause()` calls this whenever a
+   * cursor-needing overlay comes up; the `pointerLockGuard` then keeps the lock
+   * off until the overlay closes. Safe to call when nothing is locked.
+   */
+  exitPointerLock() {
+    try {
+      if (document.pointerLockElement) document.exitPointerLock?.();
+    } catch {
+      /* not eligible — nothing to release */
+    }
+  }
+
   detach() {
     removeEventListener('keydown', this._bound.keydown);
     removeEventListener('keyup', this._bound.keyup);
@@ -113,6 +141,17 @@ export class Input {
   }
 
   requestPointerLock() {
+    // A UI modal that owns the mouse must not have the pointer yanked out from
+    // under it. `menu.close()` re-requests the lock on the way back to the game,
+    // and the story overview it hands off to has no lock-release of its own — so
+    // a grab here while the world is paused hides the cursor over a menu the
+    // player is trying to click, and the browser then starts eating Escape.
+    // A throwing guard must never break input, so it is wrapped.
+    try {
+      if (typeof this.pointerLockGuard === 'function' && this.pointerLockGuard()) return;
+    } catch {
+      /* a broken guard is not a reason to refuse the lock */
+    }
     // Chrome returns a promise that rejects if the document is not eligible
     // (headless capture, an iframe, a lock request too soon after an exit).
     // An unhandled rejection there shows up as a page error in the harness, so
@@ -140,7 +179,16 @@ export class Input {
 
   _onMouseDown(e) {
     if (!this.enabled) return;
-    if (!this.pointerLocked && e.button === 0) this.requestPointerLock();
+    // ONLY a click on the game canvas asks for pointer lock. A click that landed
+    // on a HUD control, a menu button, a map pin or the story overview is a UI
+    // interaction, not a request to re-enter mouse-look — grabbing the lock
+    // there hides the cursor, retargets the following mouseup at the canvas so
+    // the button never receives its `click`, and makes the browser eat Escape.
+    // `.ow-hud` is `pointer-events:none`, so an empty-world click still falls
+    // through to the canvas and locks exactly as before.
+    if (!this.pointerLocked && e.button === 0 && e.target === this.canvas) {
+      this.requestPointerLock();
+    }
     this._pendingDown.add(`Mouse${e.button}`);
   }
 

@@ -85,6 +85,40 @@ function soloBus(mixer, name) {
   }
 }
 
+/**
+ * The buses the "Effects" slider drives, mirrored from src/ui/menu.js. `music`
+ * is driven by its own slider; everything audible else is an SFX bus.
+ */
+const SFX_BUSES = ['weapons', 'foley', 'ambience', 'sirens', 'vehicles', 'voice', 'ui'];
+
+/**
+ * Apply the master/mute/music/effects controls EXACTLY as the pause menu does
+ * (src/ui/menu.js `_applyAudio`), through the public Mixer API and nothing else.
+ * This is the whole point of the mute gate: prove the emitted buffer obeys the
+ * same calls the UI makes, not a private back door.
+ */
+function applyControls(mixer, opts) {
+  if (opts.master !== undefined || opts.mute !== undefined) {
+    mixer.setMasterVolume(opts.mute ? 0 : (opts.master ?? mixer.masterVolume));
+  }
+  if (opts.music !== undefined) mixer.setBusVolume('music', opts.music);
+  if (opts.sfx !== undefined) {
+    for (const bus of SFX_BUSES) mixer.setBusVolume(bus, opts.sfx);
+  }
+  // NEGATIVE CONTROL for the mute gate. Undo the post-fader send scaling so the
+  // reverb send is pre-fader again — exactly the bug that shipped. Under this a
+  // source keeps its wet tail with its bus turned down, so the gate that asserts
+  // "silent under slider=0" MUST go red here. If it does not, the gate is
+  // measuring nothing.
+  if (opts.preFaderSend) {
+    for (const name in mixer.buses) {
+      const g = mixer.buses[name].send.gain;
+      g.cancelScheduledValues(0);
+      g.value = 1;
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Scenes                                                              */
 /* ------------------------------------------------------------------ */
@@ -112,7 +146,7 @@ for (const kind of Object.keys(ENGINE_PROFILES)) {
       const sendG = actx.createGain();
       sendG.gain.value = 0.12;
       v.out.connect(sendG);
-      sendG.connect(mixer.reverbSend);
+      sendG.connect(mixer.busSend('vehicles'));
       v.start(1);
       const idle = p.idle, red = p.redline;
       const st = { rpm: idle, throttle: 0, gear: 1, load: 0, speed: 0, redline: red, idle };
@@ -526,6 +560,73 @@ SCENES.onfoot = {
   },
 };
 
+/**
+ * A weapon firing on a steady cadence, straight into the weapons bus the way
+ * `index.js._playDry` wires the player's own gun. An isolated SFX source for the
+ * mute/volume gate — no engine, no city, nothing else to confuse the RMS.
+ */
+SCENES.weaponLoop = {
+  seconds: 6,
+  build({ actx, rng, bank, mixer }) {
+    let shotTimer = 0;
+    return (t, dt) => {
+      shotTimer -= dt;
+      if (shotTimer <= 0) {
+        shotTimer = 0.4;
+        const v = weaponShot(actx, bank, rng, WEAPON_PROFILES.rifle, {
+          when: actx.currentTime + 0.005, distance: 2, firstPerson: true,
+        });
+        v.node.connect(mixer.bus('weapons'));
+        // Wet path too, exactly as index.js `_playDry` wires the player's gun,
+        // so the gate proves the Effects slider takes the weapon's reverb with it.
+        if ((v.send ?? 0) > 0) {
+          const sendG = actx.createGain();
+          sendG.gain.value = 0.15 * v.send;
+          v.node.connect(sendG);
+          sendG.connect(mixer.busSend('weapons'));
+        }
+      }
+      mixer.update(dt);
+    };
+  },
+};
+
+/**
+ * A cruiser parked 25 m off at three stars, siren held. Unlike `sirenPass` the
+ * source does not move, so its level is steady and a tail window measures a
+ * clean RMS — the scene the mute/volume gate leans on.
+ */
+SCENES.sirenStatic = {
+  seconds: 6,
+  build({ actx, rng, bank, mixer, field }) {
+    const pa = new PoliceAudio(actx, bank, mixer, field, rng.fork());
+    pa.setWanted(3, 0);
+    const unit = { vehicle: { id: 'cop' }, kind: 'police', x: 6, y: 1, z: 24, dist: 25 };
+    field.setListener(0, 1.6, 0, 0, 0, -1, 0, 1, 0, 0);
+    return (t, dt) => {
+      pa.update(dt, [unit]);
+      field.update(dt);
+    };
+  },
+};
+
+/** One engine held at a steady cruise — the constant-level engine for the gate. */
+SCENES.engineSteady = {
+  seconds: 6,
+  build({ actx, rng, bank, mixer }) {
+    const p = ENGINE_PROFILES.muscle;
+    const v = new EngineVoice(actx, bank, rng.fork(), p, true);
+    v.out.connect(mixer.bus('vehicles'));
+    const sendG = actx.createGain();
+    sendG.gain.value = 0.12;
+    v.out.connect(sendG);
+    sendG.connect(mixer.busSend('vehicles'));
+    v.start(1);
+    const st = { rpm: 4200, throttle: 0.7, gear: 3, load: 0.7, speed: 26, redline: p.redline, idle: p.idle };
+    return (t, dt) => v.setState(st, dt, 1);
+  },
+};
+
 /* ------------------------------------------------------------------ */
 /* Runner                                                              */
 /* ------------------------------------------------------------------ */
@@ -542,6 +643,7 @@ export async function renderScene(name, opts = {}) {
   const h = harness(actx, opts.seed ?? 0xB0A7 + name.length * 7919);
   const tick = scene.build({ actx, ...h });
   if (opts.solo) soloBus(h.mixer, opts.solo);
+  applyControls(h.mixer, opts);
   const buf = tick ? await renderDriven(actx, seconds, tick) : await actx.startRendering();
 
   const n = buf.length;

@@ -289,7 +289,7 @@ export class VehicleAudio {
       .connect(mixer.bus('vehicles'));
     const send = gain(actx, 0.06);
     this._cabinGain.connect(send);
-    send.connect(mixer.reverbSend);
+    send.connect(mixer.busSend('vehicles'));
     this._cabinSend = send;
 
     this.stats = { records: 0, full: 0, lod: 0, silent: 0 };

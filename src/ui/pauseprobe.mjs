@@ -392,6 +392,25 @@ async function runBoot() {
     ([x, y]) => window.__CLICK__(x, y), await at('.ow-boot-intro .ow-btn.primary')
   );
   await page.waitForTimeout(600);
+
+  // START now drops a first-time player straight into the chapter's INTRO
+  // CUTSCENE (the reference does the same; it is what makes story mode legible
+  // — the player cannot miss what he is being asked to do). The sim is held by
+  // the arbiter's `cut` claim while it plays, which is CORRECT: you do not
+  // simulate the world during a narrative beat. Skip it the way a player does
+  // (SKIP ALL) and let the clock be handed back, so the pause-menu assertions
+  // below test the running game, not the cutscene. If the save has no pending
+  // chapter (story done) there is no cutscene and this is a no-op.
+  const skippedIntro = await page.evaluate(() => {
+    const c = window.__ENGINE__.ctx.peek('ui')?.subs?.cut;
+    if (c?.active) { c.skipAll?.(); return true; }
+    return false;
+  });
+  if (skippedIntro) {
+    await page.waitForFunction(() => window.__ENGINE__.time.scale === 1, null, { timeout: 8000 })
+      .catch(() => {});
+  }
+
   const playing = await page.evaluate(() => {
     const e = window.__ENGINE__;
     return {
@@ -408,7 +427,10 @@ async function runBoot() {
   rec(label, 'START enters the game as the brother you picked',
     !playing.active && playing.character === target,
     `overlay gone ${!playing.active} · playing ${playing.character}`);
-  rec(label, 'START hands over a running game with control',
+  rec(label, 'START opens the chapter intro (the onboarding a player cannot miss)',
+    skippedIntro,
+    skippedIntro ? 'intro cutscene played and was skippable' : 'no intro cutscene appeared on START');
+  rec(label, 'the game runs with control once the intro is skipped',
     playing.scale === 1 && playing.control,
     `time.scale ${playing.scale}, control ${playing.control}`);
   rec(label, 'START takes pointer lock, so mouse-look works immediately',

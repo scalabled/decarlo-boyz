@@ -364,8 +364,8 @@ export class WorldQuery {
     return veh.spawn(type, this._v, yaw, opts ?? EMPTY_OPTS);
   }
 
-  despawnVehicle(v) {
-    if (v) this.vehicles?.despawn?.(v);
+  despawnVehicle(v, opts) {
+    if (v) this.vehicles?.despawn?.(v, opts);
   }
 
   damageVehicle(v, amount, point) {

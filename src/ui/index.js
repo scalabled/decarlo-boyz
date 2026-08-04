@@ -637,6 +637,18 @@ export class UiSystem {
     this.menu.onToggle = () => this._syncPause();
 
     /**
+     * Hand the input layer a way to refuse a pointer-lock grab while a modal
+     * owns the mouse. Two callers need this: the window-level mousedown grab in
+     * `src/core/input.js` fires on any click, and `menu.close()` re-requests the
+     * lock on its way back to the game. Neither should lock while `isPaused()` —
+     * the Story button closes the menu straight into the story overview, and a
+     * lock taken in that gap leaves the overview with a captured, invisible
+     * cursor and its buttons dead. `input` treats this as OPTIONAL: headless
+     * benches and the model-preview page boot without `ui` and never set it.
+     */
+    if (ctx.input) ctx.input.pointerLockGuard = () => this.isPaused();
+
+    /**
      * ---------------------------------------------------------------------
      * THE CONTEXTUAL ACTION — one control, whatever the world is offering
      * ---------------------------------------------------------------------
@@ -1800,7 +1812,17 @@ export class UiSystem {
     // no window in which both of us own the scale.
     w.cut = !off && !!this.subs.cut.active;
     w.wheel = !off && (this.weaponWheel.open || this.charWheel.open);
-    return this.pause.sync(w);
+    const frozen = this.pause.sync(w);
+    // Any overlay the player clicks with the mouse must free the cursor. A
+    // window-level pointer lock survives the overlay opening (M/O/P open it
+    // from the keyboard, clicking nothing), so without this the map/story/phone
+    // came up with a captured, invisible cursor and dead buttons — the exact
+    // "I can't click Let's Ride until I press Escape first" report. The lock
+    // guard (input.pointerLockGuard = isPaused) then keeps it off until the
+    // overlay closes, and the next click in the running game re-grabs it.
+    const needsCursor = w.menu || w.story || w.map || w.phone || w.cheats || w.ending || w.card;
+    if (needsCursor) this.ctx?.input?.exitPointerLock?.();
+    return frozen;
   }
 
   /**
@@ -2539,6 +2561,12 @@ export class UiSystem {
   }
 
   dispose() {
+    // Hand the pointer-lock decision back to `input`'s own default. Leaving a
+    // closed-over `isPaused` on a torn-down `ui` would answer every future lock
+    // request against a dead arbiter.
+    if (this.ctx?.input && this.ctx.input.pointerLockGuard) {
+      this.ctx.input.pointerLockGuard = null;
+    }
     for (const off of this._unsubs) off();
     this._unsubs.length = 0;
     this.crosshair.dispose();

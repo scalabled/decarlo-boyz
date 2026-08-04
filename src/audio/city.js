@@ -450,7 +450,7 @@ export class CityAmbience {
     series(outLP, outG).connect(bus);
     const sendTap = gain(actx, 0.25);
     outG.connect(sendTap);
-    sendTap.connect(this.mixer.reverbSend);
+    sendTap.connect(this.mixer.busSend('ambience'));
     this._outLP = outLP;
     this._outGain = outG;
     this.nodes.push(outLP, outG, sendTap);
@@ -642,7 +642,7 @@ export class CityAmbience {
     this.rainOut.connect(bus);
     const send = gain(actx, 0.18);
     this.rainOut.connect(send);
-    send.connect(this.mixer.reverbSend);
+    send.connect(this.mixer.busSend('ambience'));
     this.nodes.push(this.rainOut, send);
 
     /* the air: broad hiss, brightening as it gets heavier */

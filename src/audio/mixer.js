@@ -12,8 +12,10 @@
  *   │      ▲                              masterSum ─► masterComp ─► softClip ─► out
  *   │   convolver x5 (space blend)           ▲
  *   │      ▲                                 │
- *   └── reverbSend ◄─ per-voice send    ui bus + tinnitus (bypass the muffle,
- *                                        so HUD and the ring stay audible)
+ *   └── reverbSend ◄─ bus.send ◄─ per-voice ui bus + tinnitus (bypass the muffle,
+ *                     send. The per-bus node so HUD and the ring stay audible)
+ *                     is POST-FADER, so a bus's
+ *                     volume/mute takes its wet tail with it.
  *
  * Ducking is a manual sidechain: gunfire pushes `ambience`/`foley` down with a
  * fast setTargetAtTime and lets them float back over ~400 ms. That is exactly
@@ -119,6 +121,14 @@ export class Mixer {
       const input = gain(actx, 1);        // voices connect here
       const duck = gain(actx, 1);         // sidechain victim
       const trim = gain(actx, def.trim);  // static balance
+      // Post-fader reverb send scaler. Every source's per-voice send routes
+      // through its bus's `send` node (see `busSend`) on the way to the shared
+      // reverb, so the same volume/mute control that scales the dry bus scales
+      // its wet tail too. Default 1 => the tuned mix is byte-identical until a
+      // slider moves; `setBusVolume` drives it. Without this the reverb send is
+      // pre-fader and a source (a siren especially, whose send is 0.5) stays
+      // audible with its bus turned all the way down.
+      const send = gain(actx, 1);
       input.connect(duck);
       duck.connect(trim);
       let tail = trim;
@@ -136,7 +146,7 @@ export class Mixer {
       // ui bypasses the muffle: menu clicks must survive a grenade.
       tail.connect(name === 'ui' ? this.masterSum
         : def.exterior ? this.exteriorSum : this.worldSum);
-      this.buses[name] = { input, duck, trim, comp, baseTrim: def.trim, duckAmount: 0 };
+      this.buses[name] = { input, duck, trim, send, comp, baseTrim: def.trim, duckAmount: 0 };
     }
 
     /* ---- reverb ---------------------------------------------------- */
@@ -150,6 +160,8 @@ export class Mixer {
     this.sendLP = biquad(actx, 'lowpass', 9000, 0.7);
     this.reverbSend.connect(this.sendHP);
     this.sendHP.connect(this.sendLP);
+    // Each bus's post-fader send tap feeds the shared reverb through this point.
+    for (const name in this.buses) this.buses[name].send.connect(this.reverbSend);
 
     this.spaces = {};
     this.spaceNames = Object.keys(IR_SPECS);
@@ -223,6 +235,16 @@ export class Mixer {
   /** Bus input node a voice should connect to. */
   bus(name) {
     return (this.buses[name] ?? this.buses.foley).input;
+  }
+
+  /**
+   * Post-fader reverb send node for a bus. A voice hands its per-voice send gain
+   * here instead of straight to `reverbSend`, so the bus's volume/mute control
+   * scales its wet tail as well as its dry signal. Falls back to the foley bus,
+   * matching `bus()`.
+   */
+  busSend(name) {
+    return (this.buses[name] ?? this.buses.foley).send;
   }
 
   /**
@@ -371,7 +393,14 @@ export class Mixer {
   setBusVolume(name, v) {
     const b = this.buses[name];
     if (!b) return;
-    b.trim.gain.setTargetAtTime(clamp(v, 0, 2) * b.baseTrim, this.actx.currentTime, 0.05);
+    const f = clamp(v, 0, 2);
+    const t = this.actx.currentTime;
+    b.trim.gain.setTargetAtTime(f * b.baseTrim, t, 0.05);
+    // Post-fader: the same factor scales this bus's send into the shared reverb,
+    // so the wet tail follows the fader. `f` is the raw slider factor (1 at
+    // default), not `f * baseTrim` — the send already carries the tuned wet
+    // level, and we only want the player's control on top of it.
+    b.send.gain.setTargetAtTime(f, t, 0.05);
   }
 
   /** Rough gain-reduction readout, handy for the debug overlay. */
@@ -396,7 +425,8 @@ export class Mixer {
     this.spaces = {};
     for (const name in this.buses) {
       const b = this.buses[name];
-      b.input.disconnect(); b.duck.disconnect(); b.trim.disconnect(); b.comp?.disconnect();
+      b.input.disconnect(); b.duck.disconnect(); b.trim.disconnect();
+      b.send.disconnect(); b.comp?.disconnect();
     }
     this.reverbSend.disconnect(); this.sendHP.disconnect(); this.sendLP.disconnect();
     this.reverbReturn.disconnect();

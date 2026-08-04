@@ -315,6 +315,15 @@ export class CheatMenu {
     // anything else — `ui._syncPause()` derives a `cheats` claim from `open`
     // and the arbiter stops the clock this frame.
     document.exitPointerLock?.();
+    // On desktop this button is only reachable ON the pause overlay (see
+    // `update()`), so opening the panel usually means the pause menu is up. Take
+    // it down: the cheat panel sits BELOW the menu in the DOM and would be
+    // painted behind it, and one modal at a time is the rule everywhere else.
+    // `open` is already true here, so the menu's own `requestPointerLock()` on
+    // close is refused by `ui`'s pause guard rather than fighting the exit
+    // above. On a keyboard-opened panel in free roam the menu is closed and this
+    // is a no-op.
+    this.ui?.menu?.close?.();
     this.setTab(this.tab);
     this.ui?.sfx?.('wheel_open', 0.5);
   }
@@ -1136,12 +1145,34 @@ export class CheatMenu {
       }
     }
 
-    // The button hides under anything that owns the screen, and STAYS UP while
-    // our own panel is open — "the same button closes it" is a door out.
+    /**
+     * WHEN THE BUTTON IS ON SCREEN — and it is NOT the same answer on the two
+     * platforms, because pointer lock exists on only one of them.
+     *
+     *   TOUCH: there is no pointer lock, so the mouse can always reach the
+     *     button. Keep it always-on, hidden only under a screen-owning modal,
+     *     and always up while our own panel is open ("the same button closes it"
+     *     is one of the five doors out).
+     *
+     *   DESKTOP: while the player is actually playing, the pointer is LOCKED and
+     *     the cursor cannot reach this button at all — a click there just grabs
+     *     the lock. So showing it during play is a lie. Show it ONLY where the
+     *     mouse is free: the pause overlay. Opening the panel from there closes
+     *     the menu (see `show()`), and the panel keeps the button up as its own
+     *     door out. The `` ` `` / F8 key still opens the panel straight from
+     *     gameplay, so nothing is lost.
+     */
     const ui = this.ui;
-    const covered = !ui ? false : !!(ui.menu?.open || ui.map?.open || ui.phone?.open ||
-      ui.story?.open || ui.ending?.active || ui.bigCard?.active || ui.boot?.active);
-    setStyle(this.btn, 'display', covered && !this.open ? 'none' : '');
+    const touch = !!ui?.touch?.active;
+    let show;
+    if (touch) {
+      const covered = !ui ? false : !!(ui.menu?.open || ui.map?.open || ui.phone?.open ||
+        ui.story?.open || ui.ending?.active || ui.bigCard?.active || ui.boot?.active);
+      show = this.open || !covered;
+    } else {
+      show = this.open || !!ui?.menu?.open;
+    }
+    setStyle(this.btn, 'display', show ? '' : 'none');
     setClass(this.btn, 'on', this.open);
 
     this.a = damp(this.a, this.open ? 1 : 0, 16, rawDt);

@@ -413,8 +413,16 @@ export class PauseMenu {
     const storyBtn = el('button', 'ow-btn', btns, 'Story');
     storyBtn.type = 'button';
     storyBtn.addEventListener('click', () => {
-      this.close();
+      // Open the overview BEFORE closing the menu. `close()` re-requests pointer
+      // lock on its way back to the game, and `ui`'s pause guard only refuses
+      // that grab while SOMETHING is claiming the pause. Closing first would
+      // leave a one-call gap in which nothing is paused, the lock is taken, and
+      // the story overview — which has no pointer-lock release of its own — is
+      // handed a captured, invisible cursor: the "click Story, then you cannot
+      // click Let's Ride until you press ESC" trap. Opening first keeps the
+      // world claimed across the whole transition.
       this.ctx.peek('ui')?.openStory?.();
+      this.close();
     });
     const reset = el('button', 'ow-btn', btns, 'Defaults');
     reset.type = 'button';

@@ -374,6 +374,12 @@ export class TrafficSystem {
   /** Detach a driver and destroy its car. */
   recycle(driver, reason = 'far') {
     const v = driver.vehicle;
+    // NEVER recycle the car the player is in or a live mission vehicle. The
+    // chokepoint in `vehicles.despawn` refuses the handle anyway, but recycling
+    // here would still splice the driver and leave a half-freed car in the
+    // world. Traffic does not normally own either kind — but a carjacked car
+    // that is later mission-tagged, or a handover race, must not slip through.
+    if (v && (this.isPlayerVehicle(this.ctx, v) || v.isMission)) return false;
     const i = this.drivers.indexOf(driver);
     if (i >= 0) this.drivers.splice(i, 1);
     if (v) {
@@ -637,8 +643,11 @@ export class TrafficSystem {
       let best = -1;
       let bestD = -1;
       for (let i = 0; i < this.drivers.length; i++) {
-        const p = this.drivers[i].vehicle?.position;
+        const veh = this.drivers[i].vehicle;
+        const p = veh?.position;
         if (!p) { best = i; bestD = Infinity; break; }
+        // The player's car and any live mission vehicle are never surplus.
+        if (this.isPlayerVehicle(ctx, veh) || veh.isMission) continue;
         const d = Math.hypot(p.x - this.anchor.x, p.z - this.anchor.z);
         if (d <= bestD) continue;
         if (d < TUNE.despawnHard && this.director.visible(ctx, p.x, p.z)) continue;
@@ -995,7 +1004,10 @@ export class TrafficSystem {
     // this function can have.
     const pv = this.playerVehicle() ?? this._playerCar;
     for (let i = this._abandoned.length - 1; i >= 0; i--) {
-      if (this._abandoned[i].v === pv) this._abandoned.splice(i, 1);
+      const av = this._abandoned[i].v;
+      // Never let the wreck-ager delete the car the player is in, or a live
+      // mission vehicle that reached the list on a `vehicle:destroyed` handover.
+      if (av === pv || av?.isMission) this._abandoned.splice(i, 1);
     }
     while (this._abandoned.length > 5) {
       const old = this._abandoned.shift();

@@ -1152,7 +1152,12 @@ export class MissionRunner {
       // Leave the car the player is sitting in — yanking it out from under him
       // at the result card is the single worst thing a mission can do.
       if (this.wq.playerVehicle() === v) { v.isMission = false; continue; }
-      this.wq.despawnVehicle(v);
+      // FORCE past the `isMission` cull-guard in `vehicles.despawn`: that guard
+      // stops a distance/streaming cull taking a live mission car, but mission
+      // cleanup is the one caller authorised to remove it. Force still refuses
+      // a car the player is seated in (guard (a) holds under force), so a
+      // chapter ending while he is aboard cannot strand him.
+      this.wq.despawnVehicle(v, { force: true });
     }
     M.spawnedVehicles.length = 0;
     for (const p of M.spawnedPickups) this.pickups.despawn(p);
