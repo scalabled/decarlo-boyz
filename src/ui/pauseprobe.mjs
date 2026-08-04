@@ -433,8 +433,17 @@ async function runBoot() {
   rec(label, 'the game runs with control once the intro is skipped',
     playing.scale === 1 && playing.control,
     `time.scale ${playing.scale}, control ${playing.control}`);
-  rec(label, 'START takes pointer lock, so mouse-look works immediately',
-    playing.locked, `locked ${playing.locked}`);
+  // START lands in the intro CUTSCENE, which deliberately frees the cursor so
+  // SKIP is clickable — so the lock is NOT held at this point, by design. The
+  // real player journey is: skip the intro, click the world, and mouse-look
+  // works. Assert that journey: a canvas click after the skip takes the lock.
+  rec(label, 'the cutscene left the cursor free (SKIP was clickable)',
+    !playing.locked, `locked ${playing.locked}`);
+  await page.evaluate(() => window.__CLICK__(innerWidth / 2, innerHeight / 2));
+  await page.waitForTimeout(300);
+  const relocked = await page.evaluate(() => !!document.pointerLockElement);
+  rec(label, 'clicking the world after the intro takes pointer lock',
+    relocked, `locked ${relocked}`);
 
   // And the pause menu still behaves after arriving through the boot flow.
   const esc = async () => {

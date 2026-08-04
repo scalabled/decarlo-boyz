@@ -568,7 +568,19 @@ async function casePointerLock() {
   // and holds the world for its own 4.6 s. Wait it out on the UNSCALED clock
   // before doing anything, or this case measures a frozen screen.
   await page.evaluate(() => window.__ENGINE__.ctx.peek('game')?.abortMission?.());
-  for (let i = 0; i < 60 && (await snap()).cardVis > 0.02; i++) await pump(12);
+  // Wait for the card's PAUSE CLAIM to release, not just its opacity: the
+  // `active` flag (and with it the clock claim) clears a few frames after the
+  // fade, and a lock granted inside that gap is immediately handed back by the
+  // grant-time guard — which is correct behaviour, not a scene to measure.
+  for (
+    let i = 0;
+    i < 60 &&
+    (await page.evaluate(() => {
+      const ui = window.__ENGINE__.ctx.peek('ui');
+      return ui.bigCard.active || ui.pause.frozen;
+    }));
+    i++
+  ) await pump(12);
 
   await page.evaluate(() => window.__LOCK__.grab());
   await pump(20);

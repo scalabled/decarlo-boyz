@@ -1820,8 +1820,28 @@ export class UiSystem {
     // "I can't click Let's Ride until I press Escape first" report. The lock
     // guard (input.pointerLockGuard = isPaused) then keeps it off until the
     // overlay closes, and the next click in the running game re-grabs it.
-    const needsCursor = w.menu || w.story || w.map || w.phone || w.cheats || w.ending || w.card;
-    if (needsCursor) this.ctx?.input?.exitPointerLock?.();
+    // `w.cut` is IN this list on purpose: the intro cutscene has a SKIP button
+    // and click-to-advance, and the first player report was exactly "I cannot
+    // click skip" — the free-roam pointer lock survived into the cutscene and
+    // held the cursor captive over an interstitial made of buttons. Releasing
+    // here and letting the guard refuse re-grabs until the scene ends gives the
+    // cursor back for the interstitial; the next canvas click re-locks.
+    //
+    // EDGE-triggered, twice over. Level-triggered, this ran every sync while
+    // the result card's `active` flag outlived its fade, killing every grab the
+    // player attempted for seconds after the card had visually gone. And the
+    // release must DISARM `_hadPointerLock` in the same breath: `_input` reads
+    // "had the lock, lost it" as the player pressing Escape (in a real browser
+    // that IS how the first Escape arrives), so a deliberate release here would
+    // otherwise arm a pause menu that springs open over the very interstitial
+    // the release was freeing the cursor for.
+    const needsCursor =
+      w.menu || w.story || w.map || w.phone || w.cheats || w.ending || w.card || w.cut;
+    if (needsCursor && !this._needsCursorPrev) {
+      this._hadPointerLock = false;               // ours, not an Escape
+      this.ctx?.input?.exitPointerLock?.();
+    }
+    this._needsCursorPrev = needsCursor;
     return frozen;
   }
 
@@ -2200,9 +2220,14 @@ export class UiSystem {
       this._hadPointerLock = true;
     } else if (this._hadPointerLock) {
       this._hadPointerLock = false;
+      // The cutscene and the result card are interstitials, not gameplay: a
+      // lock lost while one is up is either our own deliberate release (the
+      // cursor freed so SKIP is clickable) or a real Escape — and a real
+      // Escape during a cut means "skip", which the scene's own key handler
+      // already does. Neither should stack a pause menu on top.
       if (!this.menu.open && !this.map.open && !this.phone.open &&
           !this.story.open && !this.ending.active && !this.boot?.active &&
-          !this.cheats?.open) {
+          !this.cheats?.open && !this.subs.cut.active && !this.bigCard.active) {
         this.menu.show();
       }
     }

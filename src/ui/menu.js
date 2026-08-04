@@ -424,6 +424,23 @@ export class PauseMenu {
       this.ctx.peek('ui')?.openStory?.();
       this.close();
     });
+    // Map and Phone: every overlay must be reachable BY MOUSE ALONE. On desktop
+    // the pointer is locked in play, so a player who does not know the M / P
+    // keys had literally no way to open these — "mouse lock prevents user from
+    // seeing map unless they press 'm'". Same open-before-close order as Story,
+    // for the same pointer-lock reason documented above.
+    const mapBtn = el('button', 'ow-btn', btns, 'Map');
+    mapBtn.type = 'button';
+    mapBtn.addEventListener('click', () => {
+      this.ctx.peek('ui')?.openMap?.();
+      this.close();
+    });
+    const phoneBtn = el('button', 'ow-btn', btns, 'Phone');
+    phoneBtn.type = 'button';
+    phoneBtn.addEventListener('click', () => {
+      this.ctx.peek('ui')?.phone?.show?.();
+      this.close();
+    });
     const reset = el('button', 'ow-btn', btns, 'Defaults');
     reset.type = 'button';
     reset.addEventListener('click', () => {

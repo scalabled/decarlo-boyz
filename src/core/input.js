@@ -212,6 +212,21 @@ export class Input {
   _onLockChange() {
     this.pointerLocked = document.pointerLockElement === this.canvas;
     if (!this.pointerLocked) this._onBlur();
+    // A lock GRANT is asynchronous, so one requested in play can land after an
+    // interstitial (the intro cutscene, a menu) has taken the screen — the
+    // guard refused new REQUESTS by then, but this grant was already in
+    // flight, and it re-captures the cursor over a screen made of buttons.
+    // Same guard, applied to the grant: if the UI needs the cursor now, give
+    // the lock straight back.
+    if (this.pointerLocked) {
+      try {
+        if (typeof this.pointerLockGuard === 'function' && this.pointerLockGuard()) {
+          this.exitPointerLock();
+        }
+      } catch {
+        /* a broken guard is not a reason to hold the lock */
+      }
+    }
   }
 
   /** Losing focus must release every held key, or the player runs forever. */
