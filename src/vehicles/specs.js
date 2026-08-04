@@ -18,6 +18,7 @@
  *   bus     10 t of transit bus. The heaviest, slowest, tallest thing on the road.
  *   bicycle no engine, no tank: the RIDER is the engine. Slowest powered thing.
  *   heli    no wheels and no road at all — see `heli.js`
+ *   tram    on RAILS, not roads: kinematic, timetable-driven — see `tram.js`
  *
  * `style` is consumed by body.js; every number in it is a real dimension on the
  * vehicle, so the silhouettes are distinguishable from 60 m in one glance.
@@ -99,6 +100,24 @@ export const PAINTS = {
     { name: 'rust brown', color: 0x6b4426, f: 0.02, c: 0.1 },
   ],
   police: [{ name: 'precinct', color: 0x0b0d10, f: 0.3, c: 1.0 }],
+  /**
+   * AIRCRAFT POOLS — one per variant, so the four flyables read differently at
+   * a glance. The base Riverhop and Skylark keep the fleet's `work`/`common`
+   * greys; the news machine is broadcast livery and the sport plane is club
+   * racing colours. Nothing here repeats a colour from `work` or `common` —
+   * `flightprobe` asserts the pools are disjoint from each sibling's, so a
+   * respray that collapses the distinction goes red.
+   */
+  newscopter: [
+    { name: 'broadcast white', color: 0xdad8d0, f: 0.14, c: 1.0 },
+    { name: 'channel blue', color: 0x1c4f9c, f: 0.5, c: 1.0 },
+    { name: 'action yellow', color: 0xd2a41d, f: 0.42, c: 1.0 },
+  ],
+  sportair: [
+    { name: 'racing red', color: 0xa5231d, f: 0.55, c: 1.0 },
+    { name: 'club cream', color: 0xd8d2bd, f: 0.18, c: 1.0 },
+    { name: 'pylon orange', color: 0xc4561a, f: 0.5, c: 1.0 },
+  ],
   /**
    * HERO POOLS — the three brothers' own cars, each a single believable
    * catalogue colour so the personal car reads the same every time you get in
@@ -1422,6 +1441,91 @@ export const VEHICLE_SPECS = {
     },
   },
 
+  /* -------------------------------------------------------- tram ---- */
+  /**
+   * THE MONONGAHELA — a PCC-style interurban trolley on the Strip ->
+   * Lawrenceville mill line. See `tram.js` for the carriage geometry and the
+   * rail service; `src/world/railmover.js` runs it along the emitted rail
+   * polyline (`railsweep` proves that line continuous end to end).
+   *
+   * THIS CLASS IS NEVER STEPPED BY THE DYNAMICS. `TramService` flags its one
+   * instance `kinematic` and `VehicleSystem.fixedUpdate` skips `fixedStep`
+   * for it — a rail vehicle's trajectory IS the track, and a Pacejka tyre has
+   * nothing to add but drift. The drivetrain/tyre/suspension numbers below
+   * are therefore inert placeholders that only exist so `finalizeSpec` can
+   * derive an inertia tensor, collision probes and half-extents; the numbers
+   * that are REAL and load-bearing are:
+   *
+   *   mass 19500      a loaded PCC car, and the whole collision story: at
+   *                   19.5 t the pair resolver hands ~93% of any overlap to
+   *                   the car that hit it, so traffic is shoved and the tram
+   *                   holds its line — the bus behaviour, one weight class up.
+   *   dims 14.0 x 2.6 a 46-foot single-unit car; boundingRadius and the
+   *                   3-sphere pair test both come from these.
+   *   trackF 1.435    standard gauge — `roadmesh._rail` lays the railheads at
+   *                   +/-0.7175 m, and the wheel cylinders in `tram.js` sit on
+   *                   exactly that.
+   *   comY 1.15       CoM above the RAIL HEAD; TramService poses the body at
+   *                   railTop + comY, same convention as every other class.
+   *   body.hp 3600    heavier than the bus: rolling stock shrugs off a shunt.
+   *
+   * It is deliberately NOT in traffic's spawn mix, not enterable, and burns no
+   * fuel. `npm run tram` (tramprobe.mjs) is the gate.
+   */
+  tram: {
+    id: 'tram',
+    name: 'Monongahela',
+    kind: 'tram',
+    seats: 0,
+    doors: 0,
+    dims: { L: 14.0, W: 2.6, H: 3.4 },
+    mass: 19500,
+    comY: 1.15,
+    comZ: 0.5,
+    /** Bogie pivots, not axles — see BOGIE_HALF in tram.js. */
+    wheelbase: 7.6,
+    trackF: 1.435, trackR: 1.435,
+    wheel: { radius: 0.33, width: 0.09, rimFrac: 0.9, spokes: 0, style: 'steel' },
+    drive: 'rwd',
+    susp: {
+      travel: 0.06, rideHeight: 0.05,
+      freqF: 1.4, freqR: 1.4, dampF: 0.6, dampR: 0.6, reboundScale: 1,
+      arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0,
+    },
+    tyre: { ...TYRE_TRUCK },
+    engine: {
+      // Four 55 kW traction motors' worth of torque, for the audio profile if
+      // one is ever attached; the timetable in railmover.js is what actually
+      // moves it.
+      peakTorque: 900, peakRpm: 1400, redline: 2200, idle: 0,
+      inertia: 1.2, friction: 0.08, brakeTorque: 60,
+    },
+    nogas: true,
+    gearbox: { gears: [-1, 0, 1], final: 6.0, eff: 0.9, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 0 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 0, speedFalloff: 0, rate: 1, returnRate: 1, counterAssist: 0 },
+    aero: { cd: 0.8, area: 8.0, downF: 0, downR: 0, yawDrag: 10 },
+    body: { hp: 3600, crumple: 0.35 },
+    boost: null,
+    paints: ['common'],
+    style: {
+      shape: 'tram',
+      /** Lowest bodywork (skirt bottom) above the rail head. */
+      groundY: 0.30,
+      /** Base of the roof crown's own box; crown tops out ~0.36 above. */
+      roofY: 3.02,
+      hwMax: 1.30,
+      /** The window band: sill, head, and the letterboard above it. */
+      skirtY: 0.30, beltY: 1.45, winTopY: 2.30, cantY: 2.62,
+      floorY: 0.90,
+      /** Bogie pivot distance from centre (= wheelbase / 2) and wheel size. */
+      bogieZ: 3.8, wheelR: 0.33,
+      headlight: { w: 0.12, h: 0.12, yf: 0.3, inset: 0, kind: 'round' },
+      taillight: { w: 0.16, h: 0.10, yf: 0.25, inset: 0, kind: 'bar' },
+    },
+  },
+
   /* ----------------------------------------------------- bicycle ---- */
   /**
    * THE TOWPATH — a city bicycle, and the only vehicle in the game with no
@@ -1765,6 +1869,115 @@ export const VEHICLE_SPECS = {
     },
   },
 
+  /* ----------------------------------------------------- newsheli ---- */
+  /**
+   * THE SKYWATCH 6 — a civilian news/tour helicopter, the second rotorcraft.
+   *
+   * Same flight model as the Riverhop (`kind: 'heli'`, stepped by `heli.js` —
+   * nothing here is a new controller), different MACHINE. A turbine tour ship
+   * against the Riverhop's light piston trainer:
+   *
+   *   - HEAVIER (1450 vs 1250 kg) with MORE excess power (`thrustMax` 1.9 vs
+   *     1.75) and a faster commanded climb: `climbUp` 15.5 vs 12.0 m/s. The
+   *     news machine's whole job is to get camera height NOW, and the climb is
+   *     the character difference a pilot feels first. `flightprobe` measures
+   *     both machines on the same 14 s of collective and asserts the EMITTED
+   *     altitude gap, with a negative control that swaps this rotor block for
+   *     the Riverhop's and watches the gap collapse.
+   *   - SLOWER over the ground: `discDrag` 0.55 vs 0.42 — a camera ball, a
+   *     skid-mounted antenna farm and a fat cabin are draggy — so it cruises
+   *     under the Riverhop while out-climbing it. Two variants, two orderings,
+   *     no dominance.
+   *   - BIGGER: a 10.4 m fuselage on a longer boom, a taller glazed cabin for
+   *     the camera crew, a 5.5 m four-blade disc turning slower. The length and
+   *     the disc are both asserted from the EMITTED geometry against the
+   *     Riverhop's.
+   *
+   * Broadcast livery (`newscopter` pool) — white / channel blue / action
+   * yellow — where the Riverhop wears fleet `work`/`common` greys.
+   */
+  newsheli: {
+    id: 'newsheli',
+    name: 'Skywatch 6',
+    kind: 'heli',
+    seats: 4,
+    doors: 2,
+    dims: { L: 10.4, W: 2.4, H: 3.35 },
+    /** Fuselage length only; the 11 m rotor disc is not bodywork. */
+    mass: 1450,
+    comY: 1.20,
+    comZ: 0.5,
+    /** No axles. Present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 2.8,
+    trackF: 2.0, trackR: 2.0,
+    wheel: { radius: 0.1, width: 0.08, rimFrac: 0.6, spokes: 4, style: 'steel' },
+    drive: 'rwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // A light turboshaft at the mast: smoother idle, higher torque. Audio
+      // profile and spool only — the governor holds NR, the pilot commands pitch.
+      peakTorque: 760, peakRpm: 2400, redline: 2700, idle: 700,
+      inertia: 1.0, friction: 0.09, brakeTorque: 30,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    // Fatter cabin, camera ball, antenna farm: more flat plate than the trainer.
+    aero: { cd: 1.0, area: 1.25, downF: 0, downR: 0, yawDrag: 2.2 },
+    body: { hp: 760, crumple: 1.4 },
+    /** Rotorcraft parameters — consumed only by `heli.js`. */
+    rotor: {
+      /** A bigger, slower four-blade disc: 5.5 m at ~382 rpm. */
+      radius: 5.5,
+      nominal: 40.0,
+      spoolUp: 4.0, spoolDown: 9.0,
+      /** More excess power than the trainer — see the header. */
+      thrustMax: 1.9,
+      /** THE variant number: it out-climbs the Riverhop by a quarter. */
+      climbUp: 15.5, climbDown: 15.0,
+      climbGain: 2.6,
+      holdGain: 0.9,
+      ceiling: 200, ceilingFade: 25,
+      pitchMax: 0.235, rollMax: 0.36,
+      attStiff: 5.8, attDamp: 3.2,
+      yawRate: 1.25, yawStiff: 4.4, yawDamp: 2.6,
+      /** The other variant number: draggier, so it cruises slower. */
+      discDrag: 0.55,
+      etlSpeed: 12.0, etlGain: 0.10,
+      skidK: 175000, skidC: 28000, skidMu: 0.55,
+      tailRatio: 5.0,
+      pedBlockAlt: 2.0,
+    },
+    /** Shift is the COLLECTIVE, exactly as the Riverhop. */
+    boost: { kind: 'collective', torque: 1 },
+    paints: ['newscopter'],
+    style: {
+      shape: 'heli',
+      groundY: 0.30,
+      roofY: 3.35,
+      hwMax: 1.18,
+      /** A longer, taller glazed cabin — the camera crew sits behind the pilots. */
+      cabinZ0: -0.85, cabinZ1: 2.25,
+      cabinY0: 0.60, cabinY1: 2.18,
+      floorY: 0.60,
+      noseZ: 2.62,
+      /** The long boom: a metre more tail than the Riverhop. */
+      boomZ0: -0.90, boomZ1: -5.55,
+      boomR0: 0.34, boomR1: 0.15, boomY: 1.70,
+      finY: 2.52, finZ: -5.30, finChord: 0.68,
+      stabW: 0.70, stabZ: -4.45, stabY: 1.70,
+      mastY0: 2.14, mastY1: 2.66, mastR: 0.09,
+      hubY: 2.70,
+      blades: 4, bladeChord: 0.22, bladeThick: 0.04,
+      tailR: 0.92, tailX: -0.17, tailY: 2.20, tailZ: -5.40, tailBlades: 2,
+      skidX: 0.92, skidZ0: -1.55, skidZ1: 1.55, skidY: 0.03, skidR: 0.055,
+      headlight: { w: 0.13, h: 0.11, y: 0.72, inset: 0, kind: 'round' },
+      taillight: { w: 0.08, h: 0.08, y: 2.55, inset: 0, kind: 'round' },
+    },
+  },
+
   /* -------------------------------------------------------- plane ---- */
   /**
    * THE SKYLARK — a light single-engine fixed-wing aircraft, and the second
@@ -1869,6 +2082,16 @@ export const VEHICLE_SPECS = {
       fuseZ0: -3.7, fuseZ1: 3.3, fuseY: 1.18, fuseR: 0.60, noseZ: 3.5,
       /** Cabin glazing. */
       cabinZ0: 1.1, cabinZ1: 2.9, cabinY0: 1.2, cabinY1: 2.02, floorY: 1.0,
+      /**
+       * SEATING FIELDS. `VehicleSystem.seatAnchor` has no plane branch — a
+       * fixed-wing cockpit is a car cabin as far as a seated body is concerned,
+       * so it takes the generic path, and that path reads `sillY`, `beltY` and
+       * `cowlZ`. Without them the anchor arithmetic is NaN and the boarding
+       * animation aims at nothing. Chosen so the seat pan lands on `floorY`
+       * and the head sits inside the canopy bubble; `flightprobe` asserts the
+       * emitted anchor is finite and inside the cabin for every aircraft.
+       */
+      sillY: 0.26, beltY: 1.30, cowlZ: 2.55,
       /** High wing, with a lift strut each side. */
       wingY: 2.02, wingZ: 1.5, wingSpan: 11.4, wingChord: 1.7, wingThick: 0.22,
       /** Empennage. */
@@ -1880,6 +2103,113 @@ export const VEHICLE_SPECS = {
       propZ: 3.62, propR: 0.95, propBlades: 2,
       headlight: { w: 0.12, h: 0.10, y: 1.1, inset: 0, kind: 'round' },
       taillight: { w: 0.08, h: 0.08, y: 2.5, inset: 0, kind: 'round' },
+    },
+  },
+
+  /* --------------------------------------------------- sportplane ---- */
+  /**
+   * THE SLIPSTREAM — a low-wing sport plane, the second fixed-wing.
+   *
+   * Same flight model as the Skylark (`kind: 'plane'`, stepped by `plane.js`),
+   * different AEROPLANE — the club racer against the trainer:
+   *
+   *   - FASTER. Lighter (950 vs 1150 kg), cleaner (`CD0` 0.024 vs 0.030), more
+   *     static thrust (6400 vs 5200 N) and a prop pitched for speed (`propVmax`
+   *     122 vs 92 m/s), on a smaller wing (11.0 vs 16.0 m^2). The smaller wing
+   *     is what makes the whole machine faster rather than just more powerful:
+   *     less area is less parasitic drag at cruise AND a higher flying speed,
+   *     so it uses the speed it has. `flightprobe` flies both on the same
+   *     seconds of throttle and asserts the EMITTED airspeed gap, with a
+   *     negative control that swaps in the Skylark's flight/aero blocks under
+   *     this silhouette and watches the gap collapse.
+   *   - TWITCHIER. `rollAuth` 2.3 vs 1.3 and less wing-levelling (`rollStab`
+   *     0.32 vs 0.40): it banks near twice as far on the same second of
+   *     aileron, measured on the emitted attitude.
+   *   - LOW-WING. The one-glance silhouette difference: the wing sits under
+   *     the fuselage (`wingY` 0.82 against a 1.06 m fuselage centreline) with
+   *     no lift struts — `plane.js` builds struts only for a high wing — a
+   *     shorter span (8.6 vs 11.4 m), a bubble canopy and a three-blade prop.
+   *   - Club racing colours (`sportair` pool) where the Skylark wears
+   *     `work`/`common` fleet greys.
+   */
+  sportplane: {
+    id: 'sportplane',
+    name: 'Slipstream',
+    kind: 'plane',
+    seats: 2,
+    doors: 2,
+    dims: { L: 7.4, W: 8.6, H: 2.45 },
+    /** Fuselage/tail box only; the span is bodywork the collision box owns. */
+    mass: 950,
+    comY: 0.95,
+    comZ: 0.5,
+    /** No real axles; present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 2.3,
+    trackF: 2.0, trackR: 2.0,
+    wheel: { radius: 0.26, width: 0.13, rimFrac: 0.55, spokes: 5, style: 'steel' },
+    drive: 'fwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // A ~200 kW six behind a tight cowl. Audio/spool profile only; the prop
+      // turns this into thrust in `plane.js`.
+      peakTorque: 600, peakRpm: 2700, redline: 3000, idle: 800,
+      inertia: 0.7, friction: 0.09, brakeTorque: 30,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    /** `plane.js` owns the real drag; a slick fuselage leaves little here. */
+    aero: { cd: 0.018, area: 1.6, downF: 0, downR: 0, yawDrag: 2.6 },
+    body: { hp: 560, crumple: 1.4 },
+    /** Fixed-wing parameters — consumed only by `plane.js`. */
+    flight: {
+      /** More static thrust, and a prop pitched for 122 m/s, not 92. */
+      maxThrust: 6400, propVmax: 122,
+      throttleRate: 1.8, propSpool: 2.0,
+      /** The small wing: a higher flying speed and less area to drag around. */
+      wingArea: 11.0, CL0: 0.30, CLalpha: 5.6, aoaStall: 0.30, CLmax: 1.45,
+      aoaTrim: 0.05,
+      span: 8.6, oswald: 0.82, CD0: 0.024,
+      Vref: 36,
+      pitchElev: 1.25, pitchStab: 1.55, pitchDamp: 2.5,
+      /** The twitch: near twice the Skylark's aileron, less self-levelling. */
+      rollAuth: 2.3, rollStab: 0.32, rollDamp: 2.3,
+      yawStab: 1.85, yawDamp: 1.65, rudder: 0.55,
+      groundSteer: 1.2,
+      gearK: 220000, gearC: 24000, muRoll: 0.03, muBrake: 0.75, muLat: 0.9,
+      pedBlockAlt: 2.0,
+    },
+    /** SHIFT winds the throttle lever up, SPACE winds it down. See `plane.js`. */
+    boost: { kind: 'throttle', torque: 1 },
+    paints: ['sportair'],
+    style: {
+      shape: 'plane',
+      /** Belly and fin top — the collision probe ring. */
+      groundY: 0.72,
+      roofY: 2.45,
+      /** A slimmer fuselage than the trainer's. */
+      hwMax: 0.56,
+      fuseZ0: -3.30, fuseZ1: 2.95, fuseY: 1.06, fuseR: 0.52, noseZ: 3.12,
+      /** Bubble canopy over a two-seat cockpit. */
+      cabinZ0: 0.30, cabinZ1: 2.05, cabinY0: 1.06, cabinY1: 1.82, floorY: 0.90,
+      /** Seating fields for the generic `seatAnchor` path — see the Skylark. */
+      sillY: 0.31, beltY: 1.18, cowlZ: 1.95,
+      /**
+       * THE LOW WING. Below the fuselage centreline (`fuseY` 1.06), so
+       * `plane.js` builds no lift struts; the silhouette difference from the
+       * high-wing Skylark is asserted from the emitted geometry.
+       */
+      wingY: 0.82, wingZ: 0.9, wingSpan: 8.6, wingChord: 1.45, wingThick: 0.19,
+      finZ: -3.02, finY0: 1.25, finY1: 2.40, finChord: 1.00,
+      stabZ: -2.92, stabSpan: 3.2, stabChord: 0.80,
+      /** Tricycle gear, shorter legs than the trainer. */
+      gearNoseZ: 2.05, gearMainZ: -0.35, gearX: 1.35, gearWheelR: 0.26, gearY: 0.0,
+      /** Three-blade prop on the nose. */
+      propZ: 3.24, propR: 0.88, propBlades: 3,
+      headlight: { w: 0.11, h: 0.10, y: 1.0, inset: 0, kind: 'round' },
+      taillight: { w: 0.07, h: 0.07, y: 2.28, inset: 0, kind: 'round' },
     },
   },
 

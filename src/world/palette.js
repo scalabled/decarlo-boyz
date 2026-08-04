@@ -467,6 +467,36 @@ export const PALETTE = {
     opts: { vertexMasks: true, tint: 0x4e433a, scale: 0.55, weather: [0.35, 0.5, 1.2, 0.6] },
   },
 
+  /* -------------------------------------------------------- airfields --- */
+  /**
+   * The runway strip. World-projected asphalt (no lane direction exists on a
+   * runway), a touch lighter and greyer than the streets — weathered concrete-
+   * asphalt that has sat out in the rain since the mills closed.
+   */
+  runway: { name: 'road_asphalt', surface: 'asphalt', opts: { tint: 0x767470 } },
+  /** Apron and taxiways: poured concrete panels, triplanar like the risers. */
+  apron_slab: {
+    name: 'concrete',
+    surface: 'concrete',
+    opts: { uvMode: 'triplanar', scale: 2.3, tint: 0x8f8c85, macroRelief: 0.35 },
+  },
+  /** Threshold bars, centreline dashes and painted heading numbers. */
+  runway_paint: {
+    name: 'concrete',
+    surface: 'asphalt',
+    opts: { uvMode: 'triplanar', scale: 1.1, tint: 0xd9d5c6 },
+  },
+  /** Runway edge / threshold lamps. Small boxes; real radiance so they read. */
+  runway_lamp: {
+    name: 'plaster',
+    surface: 'glass',
+    opts: {
+      scale: 0.4,
+      tint: 0xfff1cf,
+      three: { emissive: 0xffd9a0, emissiveIntensity: 9, toneMapped: true },
+    },
+  },
+
   /* ---------------------------------------------------------- bridges --- */
   bridge_concrete: { name: 'precast', surface: 'concrete', opts: { vertexMasks: true } },
   /** Steel City's bridges are painted the city's own gold. */

@@ -10,6 +10,7 @@ import { PropSystem } from './props/index.js';
 import { PhysicsSystem } from './physics/index.js';
 import { PlayerSystem } from './player/index.js';
 import { VehicleSystem } from './vehicles/index.js';
+import { FunicularSystem } from './vehicles/funicular.js';
 import { TrafficSystem } from './traffic/index.js';
 import { PedSystem } from './peds/index.js';
 import { PoliceSystem } from './police/index.js';
@@ -61,6 +62,9 @@ engine
   .add(PhysicsSystem)
   .add(PlayerSystem)
   .add(VehicleSystem)
+  // The Duquesne Incline's two moving cars — rides the track descriptor
+  // `world` publishes; gated by src/vehicles/funicularprobe.mjs.
+  .add(FunicularSystem)
   .add(TrafficSystem)
   .add(PedSystem)
   .add(PoliceSystem)

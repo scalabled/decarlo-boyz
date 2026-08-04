@@ -158,17 +158,22 @@ export function buildPlaneBody(spec, lod = 0) {
       new THREE.Vector3(0, s.floorY + 0.44, s.cabinZ1 - 0.26), 0.02, 6));
   }
 
-  /* ---- main wing (high wing, a strut each side) ---------------------- */
+  /* ---- main wing (high or low; struts only on a high wing) ----------- */
   const halfSpan = s.wingSpan * 0.5;
   const wing = wingPanel(s.wingSpan, s.wingChord, s.wingThick, 0.42);
   transform(wing, { pos: [0, s.wingY, s.wingZ] });
   out.paint.push(wing);
   // Lift struts from the fuselage belly to mid-span — the tell of a high-wing.
-  for (const side of [-1, 1]) {
-    out.trim.push(tubeBetween(
-      new THREE.Vector3(side * 0.5, fy - s.fuseR * 0.5, s.wingZ + 0.1),
-      new THREE.Vector3(side * halfSpan * 0.52, s.wingY - 0.05, s.wingZ),
-      0.05, Math.max(4, seg.tube >> 1)));
+  // A LOW wing (`wingY` at or under the fuselage centreline, like the
+  // Slipstream's) is cantilevered and carries none; struts under a low wing
+  // would read as landing-gear legs sprouting from the leading edge.
+  if (s.wingY > fy) {
+    for (const side of [-1, 1]) {
+      out.trim.push(tubeBetween(
+        new THREE.Vector3(side * 0.5, fy - s.fuseR * 0.5, s.wingZ + 0.1),
+        new THREE.Vector3(side * halfSpan * 0.52, s.wingY - 0.05, s.wingZ),
+        0.05, Math.max(4, seg.tube >> 1)));
+    }
   }
   // Wingtip nav lamps: red to port, green to starboard.
   lamp('policeRed', transform(new THREE.SphereGeometry(0.08, 8, 6),

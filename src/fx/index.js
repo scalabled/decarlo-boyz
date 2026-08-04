@@ -9,6 +9,7 @@ import { ShellSystem } from './shells.js';
 import { Ambience } from './ambience.js';
 import { SkidSystem } from './skid.js';
 import { RainSystem } from './rain.js';
+import { FountainFx } from './fountain.js';
 import { VehicleFx, objOf, posOf, velOf } from './vehiclefx.js';
 import { WorldFx } from './worldfx.js';
 import { spawnImpact } from './impacts.js';
@@ -154,6 +155,10 @@ export class FxSystem {
     ctx.scene.add(this.skid.mesh);
 
     this.rain = new RainSystem(this);
+
+    // The Point Fountain's water — anchored at runtime to the emitted basin,
+    // budgeted out of the shared lit ring. See fountain.js.
+    this.fountain = new FountainFx(this, { budget });
 
     this.vehicleFx = new VehicleFx(this);
     this.worldFx = new WorldFx(this, { enabled: budget >= 1500 });
@@ -1105,6 +1110,7 @@ export class FxSystem {
     this.skid.update(dt, this.now);
     this.vehicleFx.update(dt, this.now);
     this.rain.update(dt, this.now, ctx.camera);
+    this.fountain.update(dt, this.now, ctx.camera);
     this.worldFx.update(dt, this.now, ctx.camera);
     this._traffic(dt, ctx);
   }
@@ -2141,6 +2147,7 @@ export class FxSystem {
     this.skid.mesh.parent?.remove(this.skid.mesh);
     this.skid.dispose();
     this.rain.dispose();
+    this.fountain.dispose();
     this.vehicleFx.dispose();
     this._smokeLights = null;
     this.hazeSys.dispose();

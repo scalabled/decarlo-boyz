@@ -79,6 +79,15 @@ export function adoptLandmarkSites(published) {
     // one, and the uphill bearing it solved for a hill-oriented landmark.
     if (src.site) lm.site = src.site;
     if (src.uphill) lm.uphill = src.uphill;
+    /**
+     * The funicular TRACK DESCRIPTOR (`src/world/incline.js`), when `world`
+     * has solved one. Adopted BY REFERENCE, deliberately: `incline()` emits
+     * its trestle and rails from these exact arrays, and the `funicular`
+     * subsystem poses its moving cars by sampling the same object off
+     * `world.landmarks` — one authority, so the cars cannot drift off the
+     * rails. `src/vehicles/funicularprobe.mjs` gates that.
+     */
+    if (src.funicular) lm.funicular = src.funicular;
   }
   return moved;
 }
@@ -511,31 +520,28 @@ function blastFurnace(T, lib, lm, rng, gy) {
  * buried 10 m further up — so the track is a graded polyline that follows the
  * hill, which is also what a timber trestle is.
  */
-function incline(T, lib, lm, rng, gy, groundAt) {
+/**
+ * FALLBACK track solve for the two callers that have no `world` to ask: the
+ * standalone `preview.html` and `prewarmMaterials`' scratch build (which
+ * passes a flat groundAt — its geometry only exists to touch materials).
+ *
+ * The SHIPPED path never runs this. `world` solves the descriptor once in
+ * `src/world/incline.js` (`publishInclineTracks`, called from
+ * `WorldSystem.init` after `orientLandmarkSites`) and publishes it as
+ * `world.landmarks[].funicular.track`; `adoptLandmarkSites` copies the
+ * reference and `incline()` emits from it, so the trestle, the rails and the
+ * moving cars all read the same arrays. This copy of the math exists ONLY so
+ * the preview keeps working without a world, and it reproduces the historical
+ * behaviour verbatim — including the bearing scan `netgen.orientLandmarkSites`
+ * superseded (see the long note there for why the scan must not be primary).
+ */
+function _fallbackInclineTrack(lm, gy, groundAt) {
   const x = lm.x;
   const z = lm.z;
   const RUN = lm.uphill?.run ?? 180;
   const MIN_CLEAR = 2.2;
   const MAX_LEG = 15;
 
-  /**
-   * WHICH WAY IS UP — AND WHY THIS NO LONGER DECIDES FOR ITSELF.
-   *
-   * `world` publishes the bearing on `world.landmarks[].uphill.dir`, solved
-   * once off the RAW terrain in `netgen.orientLandmarkSites`, and reserves a
-   * capsule of ground along it so no road is laid under the trestle. The probe
-   * below is the same scan, kept for the standalone `preview.html` where there
-   * is no `world` to ask.
-   *
-   * Running it here as the primary is what broke: it probes `walkableHeightAt`,
-   * which carries the 0.55 m every road corridor sinks the ground by, and the
-   * scan is a knife edge between neighbouring bearings. So reserving the
-   * ground under the trestle CHANGED the bearing the trestle then chose — by
-   * 30 degrees, out of the capsule reserved for it, and `roadsweep.mjs`
-   * reported the 20 impassable directions that came of it. Two subsystems
-   * deciding independently which way a landmark faces is the same defect as
-   * two deciding where it is.
-   */
   let dirX = lm.uphill?.dir?.[0] ?? 0;
   let dirZ = lm.uphill?.dir?.[1] ?? 0;
   if (!Number.isFinite(dirX) || !Number.isFinite(dirZ) || (dirX === 0 && dirZ === 0)) {
@@ -587,19 +593,44 @@ function incline(T, lib, lm, rng, gy, groundAt) {
   }
   py[0] = gy + MIN_CLEAR;
 
-  /** Right-hand normal to the climb, for the two rails and the two cars. */
   const rx = dirZ;
   const rz = -dirX;
-  /** Yaw that puts a box's local +Z along the climb. */
-  const yawUp = Math.atan2(dirX, dirZ);
-  /** World point `r` metres right of the track and `a` metres up the run. */
-  const at = (r, a) => ({ x: x + rx * r + dirX * a, z: z + rz * r + dirZ * a });
-  /** Track height at along-distance `a`, interpolated between bents. */
+  const yaw = Math.atan2(dirX, dirZ);
+  const at = (r, a, out) => {
+    out = out ?? { x: 0, z: 0 };
+    out.x = x + rx * r + dirX * a;
+    out.z = z + rz * r + dirZ * a;
+    return out;
+  };
   const trackY = (a) => {
     const f = Math.max(0, Math.min(bents, (a / RUN) * bents));
     const i = Math.min(bents - 1, Math.floor(f));
     return py[i] + (py[i + 1] - py[i]) * (f - i);
   };
+  const pitchAt = (a, h = 4) => -Math.atan2(trackY(a + h) - trackY(a - h), 2 * h);
+  return { x, z, dirX, dirZ, rx, rz, run: RUN, yaw, bents, px, pz, gnd, py, gauge: 3.2, carLift: 1.2, at, trackY, pitchAt };
+}
+
+function incline(T, lib, lm, rng, gy, groundAt) {
+  const x = lm.x;
+  const z = lm.z;
+
+  /**
+   * THE TRACK IS NOT THIS FUNCTION'S DECISION ANY MORE. `world` publishes the
+   * solved descriptor (`src/world/incline.js`) and everything here EMITS from
+   * its arrays — the same arrays the `funicular` subsystem samples every frame
+   * to move the two cars. The fallback solve only runs where no world exists
+   * (preview, prewarm); see `_fallbackInclineTrack`.
+   */
+  const trk = lm.funicular?.track ?? _fallbackInclineTrack(lm, gy, groundAt);
+  const { px, pz, gnd, py, bents } = trk;
+  const RUN = trk.run;
+  /** Yaw that puts a box's local +Z along the climb. */
+  const yawUp = trk.yaw;
+  /** World point `r` metres right of the track and `a` metres up the run. */
+  const at = (r, a) => trk.at(r, a);
+  /** Track height at along-distance `a`, interpolated between bents. */
+  const trackY = trk.trackY;
 
   // lower station, square to the track
   box(T, 'brick_dark', x, gy + 5, z, 16, 10, 12, yawUp, [0.4, 0.5, 0.3], _sharedChamfer());
@@ -671,29 +702,14 @@ function incline(T, lib, lm, rng, gy, groundAt) {
     box(T, 'timber_dark', q.x, trackY(a), q.z, 8, 0.22, 0.5, yawUp, [0.8, 0.7, 0.4]);
   }
 
-  // the two cars, passing at the midpoint, each sitting on the local grade
-  for (const s of [-1, 1]) {
-    const a = RUN * (0.5 + s * 0.16);
-    const q = at(s * 3.2, a);
-    const pitch = -Math.atan2(trackY(a + 4) - trackY(a - 4), 8);
-    const car = new THREE.Matrix4()
-      .makeTranslation(q.x, trackY(a) + 1.2, q.z)
-      .multiply(new THREE.Matrix4().makeRotationY(yawUp))
-      .multiply(new THREE.Matrix4().makeRotationX(pitch));
-    // the body is stepped so the floor is level while the track is not
-    for (let k = 0; k < 4; k++) {
-      const mm = car
-        .clone()
-        .multiply(new THREE.Matrix4().makeTranslation(0, 0.7 + k * 0.42, -3.6 + k * 2.4))
-        .multiply(new THREE.Matrix4().makeScale(2.6, 2.7, 2.35));
-      T.add(k % 2 ? 'trim_red' : 'timber_dark', _sharedChamfer(), mm, { masks: [0.5, 0.45, 0.25] });
-      const gm = car
-        .clone()
-        .multiply(new THREE.Matrix4().makeTranslation(0, 1.35 + k * 0.42, -3.6 + k * 2.4))
-        .multiply(new THREE.Matrix4().makeScale(2.66, 1.2, 2.0));
-      T.add('glass_plain', _sharedBox(), gm, { masks: [0, 0.25, 0] });
-    }
-  }
+  /**
+   * NO STATIC CARS. Two counterweighted cars used to be baked in here,
+   * frozen mid-pass at t = 0.34 and 0.66. They are now LIVE: the `funicular`
+   * subsystem (`src/vehicles/funicular.js`) builds the red-and-yellow cars
+   * and runs them up and down this exact track every frame, sampling the same
+   * published descriptor these rails were just emitted from. Baking a third
+   * pair here would put ghost cars inside the moving ones.
+   */
 
   T.box('wood', x, gy + 5, z, 16, 10, 12);
   T.box('wood', ux, uy + 6, uz, 18, 12, 14);

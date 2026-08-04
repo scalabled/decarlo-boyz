@@ -359,7 +359,14 @@ export class Terrain {
       // the tarmac at a grazing angle — which is the one artefact you cannot
       // miss in a driving game.
       grid[i] = lerp(grid[i], field[i] - 0.55 * w, w);
-      roadW[i] = w;
+      // MAX, never assign: `gradeAirfields` runs first and owns a 1.0 here
+      // across each airfield bench, precisely to suppress the detail band
+      // under the runway deck. A corridor blend fringe crossing the field
+      // used to overwrite that with 0.05, the ±0.95 m detail band came back,
+      // and the terrain poked up through half the emitted runway sheet —
+      // MEASURED live: terrain 0.5-0.76 m off the bench along the county
+      // strip, deck visually buried for 250 m.
+      if (w > roadW[i]) roadW[i] = w;
     }
     return this;
   }
