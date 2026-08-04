@@ -36,6 +36,13 @@ const DET_LOCAL_JOBS_PER_FRAME = 32;
 const WALL_CLOCK_BUILD =
   typeof location !== 'undefined' &&
   new URLSearchParams(location.search).get('owWallClockBuild') === '1';
+
+/** `?owLampRankKey=1` restores the rank-derived light keys in `_submitLamps` —
+ *  the teleporting-handover bug `src/props/lampprobe.mjs` exists to catch —
+ *  kept as that probe's negative control. */
+const LAMP_RANK_KEY =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).get('owLampRankKey') === '1';
 /** True when streamed construction must resolve identically every run. */
 const detBuild = (ctx) => ctx.config.deterministic === true && !WALL_CLOCK_BUILD;
 
@@ -630,6 +637,15 @@ export class PropSystem {
    * money shot in DESIGN.md. `render.submitLight` scores requests into a FIXED
    * pool every frame, so this cannot move the visible-light count and cannot
    * trigger the shader-permutation recompile that a per-lamp PointLight would.
+   *
+   * Each submission is keyed by the LAMP'S IDENTITY (tile key + index in that
+   * tile's lamp list), never by its rank in the pick. Rank is a property of
+   * the camera: keying by it meant a reshuffle moved the rank-key's POSITION
+   * to a different lamp with no key change, so the slot never saw a handover
+   * and the sodium pool teleported instead of crossfading. With a stable key,
+   * a handover is a genuine key change and rides the renderer's ~0.15 s fade.
+   * `src/props/lampprobe.mjs` measures this on pixels; `?owLampRankKey=1` is
+   * its negative control.
    */
   _submitLamps(ctx) {
     const r = this.render;
@@ -641,12 +657,15 @@ export class PropSystem {
     const R2 = 46 * 46;
     for (const rec of this.tiles.values()) {
       if (rec.lod !== 0 || !rec.lamps) continue;
-      for (const l of rec.lamps) {
-        const dx = l.x + Math.cos(l.yaw) * l.r - cam.x;
-        const dz = l.z + Math.sin(l.yaw) * l.r - cam.z;
+      for (let j = 0; j < rec.lamps.length; j++) {
+        const l = rec.lamps[j];
+        const x = l.x + Math.cos(l.yaw) * l.r;
+        const z = l.z + Math.sin(l.yaw) * l.r;
+        const dx = x - cam.x;
+        const dz = z - cam.z;
         const d2 = dx * dx + dz * dz;
         if (d2 > R2) continue;
-        pick.push({ d2, x: l.x + Math.cos(l.yaw) * l.r, y: l.y, z: l.z + Math.sin(l.yaw) * l.r });
+        pick.push({ d2, x, y: l.y, z, key: l.key ?? (l.key = `lamp:${rec.key}:${j}`) });
       }
     }
     if (!pick.length) return;
@@ -654,7 +673,8 @@ export class PropSystem {
     const n = Math.min(3, pick.length);
     for (let i = 0; i < n; i++) {
       const p = pick[i];
-      r.submitLight(p.x, p.y, p.z, SODIUM_LIGHT, 46 * this._litMix, 26, 2, 9000 + i);
+      r.submitLight(p.x, p.y, p.z, SODIUM_LIGHT, 46 * this._litMix, 26, 2,
+        LAMP_RANK_KEY ? 9000 + i : p.key);
     }
   }
 
