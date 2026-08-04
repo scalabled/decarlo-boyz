@@ -84,6 +84,7 @@
     "keylight": "node src/sky/keyprobe.mjs",
     "shotgate": "node src/render/shotprobe.mjs",
     "slotgate": "node src/render/slotprobe.mjs --gate",
+    "lampgate": "node src/props/lampprobe.mjs --gate",
     "floatfb": "node src/render/floatfallbackprobe.mjs",
     "contact": "node src/render/contactprobe.mjs",
     "arsenal": "node src/weapons/arsenalprobe.mjs",

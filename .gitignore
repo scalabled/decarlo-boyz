@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: in a worktree this is a SYMLINK to the main checkout's
+# node_modules, and `node_modules/` (directories only) does not match a link —
+# `git add -A` would stage it as a blob.
+node_modules
 dist/
 shots/
 legacy/
