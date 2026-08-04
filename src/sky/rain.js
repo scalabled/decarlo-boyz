@@ -140,7 +140,10 @@ void main() {
   if ( age < 0.0 || age > 1.0 ) { gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 ); return; }
   // Ripples spread as sqrt(t) — surface gravity waves on shallow water do, and
   // a linear expansion is instantly readable as an animated decal.
-  float r = ( 0.10 + 0.52 * sqrt( age ) ) * aSplash2.y;
+  // Kept small: a raindrop ripple is a few cm, not a metre. The old
+  // (0.10 + 0.52) reached ~1.2 m across and read as a white decal painted on
+  // the road. Vehicle spray still gets its size from the larger aSplash2.y.
+  float r = ( 0.05 + 0.25 * sqrt( age ) ) * aSplash2.y;
   vec3 world = aSplash.xyz + vec3( position.x * r, 0.012, position.y * r );
   vUv = uv;
   vAge = age;
@@ -176,7 +179,7 @@ void main() {
   float crownAge = 1.0 - smoothstep( 0.0, 0.22, vAge );
   float crown = crownAge * lobes * exp( -pow( ( r - 0.34 ) / 0.24, 2.0 ) );
 
-  float a = ( ring * 0.72 + crown * 1.15 ) * uOpacity * ( 1.0 - vAge ) * ( 1.0 - vAge );
+  float a = ( ring * 0.72 + crown * 0.70 ) * uOpacity * ( 1.0 - vAge ) * ( 1.0 - vAge );
   if ( a <= 0.003 ) discard;
   fragColor = vec4( uColor * a, a );
 }
@@ -484,7 +487,7 @@ void main() {
     const b = ambient.b * gain + key.b * 0.05;
     su.uColor.value.setRGB(r, g, b * 1.06);
     this.splash.mat.uniforms.uColor.value.setRGB(r * 1.6, g * 1.6, b * 1.7);
-    this.splash.mat.uniforms.uOpacity.value = 0.42 + 0.45 * rain;
+    this.splash.mat.uniforms.uOpacity.value = 0.22 + 0.26 * rain;
     this.dripMat.uniforms.uColor.value.setRGB(r * 1.1, g * 1.1, b * 1.15);
   }
 
