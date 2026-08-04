@@ -227,6 +227,12 @@ export class Director {
     let dir = s.lane < e.forward ? 1 : -1;
     if (!L.drivable(e, dir)) dir = -dir;
     if (!L.drivable(e, dir)) return null;
+    // Do not aim a fresh spawn at a trap (a run of road that commits it to a
+    // dead-end U-turn) when the other direction of the same edge is usable —
+    // see LaneNet._computeTraps.
+    if (L.isTrap(e, dir) && L.drivable(e, -dir) && !L.isTrap(e, -dir)) {
+      dir = -dir;
+    }
     const lo = L.laneLo(e, dir);
     const hi = L.laneHi(e, dir);
     const lane = hi > lo ? sys.rng.int(lo, hi) : lo;

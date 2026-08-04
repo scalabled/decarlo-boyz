@@ -24,6 +24,7 @@ import { Drivetrain } from './drivetrain.js';
 import { tyreForces, rollingResistance, surfaceGrip, peakSlipRatio } from './tyre.js';
 import { stepBoat, makeHullSamples } from './boat.js';
 import { stepHeli, makeSkidPoints } from './heli.js';
+import { stepPlane, makePlaneGear } from './plane.js';
 import { WATER, HERO } from './specs.js';
 
 const GRAVITY = -9.81;
@@ -408,7 +409,10 @@ export class Vehicle {
     this.rotorThrust = 0;
     this.collective = 0;
     this.holdAlt = 0;
+    /** Fixed-wing throttle LEVER, 0..1: SHIFT winds it up, SPACE down. See `plane.js`. */
+    this.throttleLever = 0;
     if (spec.kind === 'heli') this.skidPoints = makeSkidPoints(spec);
+    if (spec.kind === 'plane') this.gearPoints = makePlaneGear(spec);
 
     /**
      * PER-HERO MODIFIERS, set by `VehicleSystem` when a player takes the wheel
@@ -548,11 +552,11 @@ export class Vehicle {
     // Pedals -> gear-aware throttle/brake. Must run BEFORE anything reads a
     // pedal: the tyres, the drivetrain and the lamps all consume `control`.
     const kind = this.spec.kind;
-    if (kind === 'boat' || kind === 'heli') {
+    if (kind === 'boat' || kind === 'heli' || kind === 'plane') {
       this.control.throttle = this.input.throttle;
       this.control.brake = this.input.brake;
       // A helm is a wheel too, and so is a pair of pedals: the same axis
-      // convention applies to the rudder and to the tail rotor.
+      // convention applies to the rudder, the tail rotor and the ailerons.
       this.control.steer = this.autoReverse ? -this.input.steer : this.input.steer;
     } else {
       this.drivetrain.mapControls(this.input, this.forwardSpeed, dt, this.control, this.autoReverse);
@@ -583,6 +587,10 @@ export class Vehicle {
     } else if (kind === 'heli') {
       // Its own controller, and it never touches the wheel path. See `heli.js`.
       stepHeli(this, dt, ctx);
+    } else if (kind === 'plane') {
+      // A fixed-wing aircraft: its own aerodynamic force model, wheel path not
+      // taken. See `plane.js`.
+      stepPlane(this, dt, ctx);
     } else {
       this._stepWheels(dt, ctx);
       // After the tyres, before the integrator: the ride-over and the recovery
@@ -1841,7 +1849,10 @@ export class Vehicle {
     if (rotors) {
       for (let i = 0; i < rotors.length; i++) {
         const r = rotors[i];
+        // Tail rotor turns about x, an aircraft propeller about z (the nose
+        // axis), and the main disc about y.
         if (r.axis === 'x') r.pivot.rotation.x = this.tailPhase;
+        else if (r.axis === 'z') r.pivot.rotation.z = this.rotorPhase;
         else r.pivot.rotation.y = this.rotorPhase;
       }
     }

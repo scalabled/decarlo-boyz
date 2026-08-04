@@ -1765,6 +1765,124 @@ export const VEHICLE_SPECS = {
     },
   },
 
+  /* -------------------------------------------------------- plane ---- */
+  /**
+   * THE SKYLARK — a light single-engine fixed-wing aircraft, and the second
+   * flyable thing in the game. See `plane.js` for the flight model; this block
+   * is its airframe and its aerodynamic constants.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY IT MUST BUILD SPEED ON A RUNWAY
+   * ────────────────────────────────────────────────────────────────────────
+   * Unlike the helicopter, an aeroplane makes NO lift standing still: lift goes
+   * as the square of airspeed (`plane.js` step 2), so the whole character of it
+   * — roll down the runway on the throttle, rotate at flying speed, and sink
+   * again the moment you drop below it — is emergent from `q = ½ρV²`, not
+   * scripted. The numbers below are chosen so it un-sticks at a believable
+   * light-aircraft speed and tops out around 65 m/s, held there by prop-thrust
+   * falling off with airspeed rather than by any clamp.
+   *
+   *   wing:  16 m^2, CL0 0.42, so at the wing's own incidence it holds its
+   *          weight up at ~52 m/s straight-and-level and ~30 m/s with the nose
+   *          rotated up; it stalls (max CL) at ~28 m/s.
+   *   thrust: strong static thrust for a short take-off roll, decaying to zero
+   *          near 92 m/s so there is a natural top speed.
+   */
+  plane: {
+    id: 'plane',
+    name: 'Skylark',
+    kind: 'plane',
+    seats: 2,
+    doors: 2,
+    dims: { L: 8.2, W: 11.4, H: 2.7 },
+    /** Fuselage/tail box only; the wing span is bodywork the collision box owns. */
+    mass: 1150,
+    comY: 1.05,
+    comZ: 0.5,
+    /** No real axles; present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 2.75,
+    trackF: 2.2, trackR: 2.2,
+    wheel: { radius: 0.30, width: 0.14, rimFrac: 0.55, spokes: 5, style: 'steel' },
+    drive: 'fwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // A ~150 kW flat-four. The governor/audio profile only; the prop turns
+      // this into thrust in `plane.js`.
+      peakTorque: 520, peakRpm: 2500, redline: 2800, idle: 780,
+      inertia: 0.8, friction: 0.09, brakeTorque: 30,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    /**
+     * `_aero`'s fuselage drag is deliberately small: `plane.js` owns the real
+     * parasitic and induced drag (applied at the CoM, so it makes no spurious
+     * pitching moment). `yawDrag` still buys a little directional damping.
+     */
+    aero: { cd: 0.02, area: 2.0, downF: 0, downR: 0, yawDrag: 3.0 },
+    body: { hp: 620, crumple: 1.4 },
+    /** Fixed-wing parameters — consumed only by `plane.js`. */
+    flight: {
+      /** Full-throttle static thrust, N, and the pitch speed it decays to, m/s. */
+      maxThrust: 5200, propVmax: 92,
+      /** Seconds to run the throttle lever from idle to full (and prop spool). */
+      throttleRate: 2.2, propSpool: 2.4,
+      /** Wing: area m^2, lift-curve slope /rad, camber offset, and stall angle. */
+      wingArea: 16.0, CL0: 0.42, CLalpha: 5.4, aoaStall: 0.28, CLmax: 1.5,
+      /** Built-in incidence/trim, rad — a touch of nose-up so it climbs off. */
+      aoaTrim: 0.05,
+      /** Span m and Oswald efficiency, for induced drag; parasitic drag coeff. */
+      span: 11.4, oswald: 0.8, CD0: 0.030,
+      /** Reference airspeed the control gains are quoted at, m/s. */
+      Vref: 30,
+      /**
+       * Control authorities are ANGULAR ACCELERATIONS (rad/s^2) scaled by
+       * dynamic pressure. Against the rate-damping term they set a steady
+       * control RATE of roughly `auth * dyn / damp` — tuned here to a snappy but
+       * flyable ~0.6 rad/s in pitch and ~1.0 rad/s in roll, not the 3 rad/s that
+       * flips the aircraft on a key tap.
+       */
+      pitchElev: 0.9, pitchStab: 1.6, pitchDamp: 2.8,
+      /** Roll: aileron authority, wing-levelling, rate damping. */
+      rollAuth: 1.3, rollStab: 0.4, rollDamp: 2.6,
+      /** Yaw: weathercock stability, rate damping, coordinating rudder. */
+      yawStab: 1.9, yawDamp: 1.7, rudder: 0.5,
+      /** Nosewheel steering authority on the ground. */
+      groundSteer: 1.1,
+      /** Gear: spring N/m, damping N/(m/s); rolling / braking / lateral friction. */
+      gearK: 240000, gearC: 26000, muRoll: 0.03, muBrake: 0.7, muLat: 0.9,
+      /** Altitude above which the aircraft stops blocking people on foot, m. */
+      pedBlockAlt: 2.0,
+    },
+    /** SHIFT winds the throttle lever up, SPACE winds it down. See `plane.js`. */
+    boost: { kind: 'throttle', torque: 1 },
+    paints: ['work', 'common'],
+    style: {
+      shape: 'plane',
+      /** Belly (lowest fuselage) and fin top — sized the collision probe ring. */
+      groundY: 0.9,
+      roofY: 2.7,
+      /** Fuselage: a tapered tube along the centreline. */
+      hwMax: 0.62,
+      fuseZ0: -3.7, fuseZ1: 3.3, fuseY: 1.18, fuseR: 0.60, noseZ: 3.5,
+      /** Cabin glazing. */
+      cabinZ0: 1.1, cabinZ1: 2.9, cabinY0: 1.2, cabinY1: 2.02, floorY: 1.0,
+      /** High wing, with a lift strut each side. */
+      wingY: 2.02, wingZ: 1.5, wingSpan: 11.4, wingChord: 1.7, wingThick: 0.22,
+      /** Empennage. */
+      finZ: -3.35, finY0: 1.4, finY1: 2.66, finChord: 1.2,
+      stabZ: -3.25, stabSpan: 3.9, stabChord: 0.9,
+      /** Tricycle gear: nose forward, two mains aft. Wheels rest at `gearY`. */
+      gearNoseZ: 2.35, gearMainZ: -0.25, gearX: 1.5, gearWheelR: 0.30, gearY: 0.0,
+      /** Propeller on the nose, turning about z. */
+      propZ: 3.62, propR: 0.95, propBlades: 2,
+      headlight: { w: 0.12, h: 0.10, y: 1.1, inset: 0, kind: 'round' },
+      taillight: { w: 0.08, h: 0.08, y: 2.5, inset: 0, kind: 'round' },
+    },
+  },
+
   /* ------------------------------------------------------ pickup ---- */
   /**
    * ──────────────────────────────────────────────────────────────────────
@@ -2459,7 +2577,9 @@ export function finalizeSpec(spec) {
     s.topSpeedEst = Math.min(vGeared, vDrag);
     // A helicopter has no gearbox in the sense above: the disc's tilt sets the
     // thrust and the drag sets the speed, so only the drag branch is meaningful.
-    if (s.kind === 'heli') s.topSpeedEst = vDrag;
+    // A fixed-wing aircraft has no road gearbox either — the prop and the wing
+    // decide its speed, so the same applies.
+    if (s.kind === 'heli' || s.kind === 'plane') s.topSpeedEst = vDrag;
   }
 
   /**

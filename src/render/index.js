@@ -431,8 +431,24 @@ export class RenderSystem {
       l.visible = true; // permanently. Never conditional. This is the contract.
       l.position.set(0, -10000 - i, 0);
       ctx.scene.add(l);
-      this._pool.push({ light: l, key: -1, level: 0 });
+      this._pool.push({ light: l, key: -1, level: 0, applied: 0, priority: 0 });
     }
+    /**
+     * `?owNoSlotKeep=1` restores the two defects `src/render/slotprobe.mjs`
+     * exists to hold shut: rank-INDEXED slot assignment (winner ranked i goes
+     * into pool slot i, so one new transient re-keys every slot below it and
+     * the whole pool crossfades to black at once) and `key >= 0` key handling
+     * (which silently discarded the string keys callers pass — a moving flare
+     * fell back to a hash of its position, i.e. a NEW key every frame, and so
+     * could never finish a fade-in). MEASURED on the night shot, road pool
+     * under an established practical while a flare flies past: baseline 87.6
+     * -> min 17.0 three frames after firing (floor 0.194). The probe's
+     * negative control runs this switch and must see that collapse.
+     */
+    this._noSlotKeep = /[?&]owNoSlotKeep=1/.test(location.search);
+    /** Scratch for `_assignLightSlots`: per-slot winner rank, per-rank flag. */
+    this._slotWin = new Int32Array(Math.max(8, this.lightSlots));
+    this._winTaken = new Uint8Array(Math.max(8, this.lightSlots));
     // ---- the light-count LOCK --------------------------------------------
     // The pool above makes the renderer's OWN contribution constant, but that
     // is only half the invariant: three bakes `numPointLights` — the count of
@@ -1180,10 +1196,15 @@ export class RenderSystem {
    * @param {number} range      metres at which it is fully cut off
    * @param {number} [priority] 0..10. Higher always beats nearer. Muzzle flash
    *                            and headlights should outrank street practicals.
-   * @param {number} [key]      stable id for this emitter, so the fade in/out
-   *                            can follow it across frames. Defaults to a hash
-   *                            of the position, which is enough for static
-   *                            lamps and fine for anything that moves slowly.
+   * @param {number|string} [key] stable id for this emitter, so the fade
+   *                            in/out — and the slot itself — can follow it
+   *                            across frames. Strings are fine ('flare0',
+   *                            'emp'); they compare by value. Defaults to a
+   *                            hash of the position, which is enough for
+   *                            static lamps and WRONG for anything that moves:
+   *                            a moving emitter without a stable key gets a
+   *                            new identity every frame and can never finish
+   *                            a crossfade. Pass one.
    */
   submitLight(x, y, z, color, intensity, range = 20, priority = 1, key = -1) {
     if (this.lightSlots === 0 || !(intensity > 0)) return;
@@ -1217,11 +1238,30 @@ export class RenderSystem {
     e.intensity = intensity;
     e.range = range;
     e.priority = priority;
-    e.key = key >= 0 ? key : (((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) | 0) >>> 1;
+    // `key >= 0` is the legacy form and a bug kept only for the negative
+    // control: it is false for the STRING keys callers actually pass
+    // ('flare0', 'motor2', 'emp', 'wfire1'), which silently demoted every one
+    // of them to the position hash — a fresh identity per frame for anything
+    // that moves. Any caller-supplied key that is not the -1 default is valid.
+    const hash = (((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) | 0) >>> 1;
+    e.key = this._noSlotKeep ? (key >= 0 ? key : hash) : key === -1 || key == null ? hash : key;
     // Priority dominates; within a priority band, screen-relevant illumination
     // wins. Inverse-square on the intensity is what makes a bright headlight
     // 40 m out beat a dim porch bulb 8 m out, which is the correct answer.
-    e.score = priority * 1e6 + intensity / (1 + d2 * 0.02);
+    let score = priority * 1e6 + intensity / (1 + d2 * 0.02);
+    // HYSTERESIS: an emitter already holding a lit slot gets a bonus on its
+    // contribution term (never on its priority band), so two near-tied lights
+    // do not trade the slot back and forth, re-running the crossfade forever.
+    if (!this._noSlotKeep) {
+      const pool = this._pool;
+      for (let i = 0; i < pool.length; i++) {
+        if (pool[i].key === e.key && pool[i].level > 0.3) {
+          score = priority * 1e6 + (score - priority * 1e6) * 1.25;
+          break;
+        }
+      }
+    }
+    e.score = score;
   }
 
   /** Diagnostics: how the light slots were spent last frame. */
@@ -2513,9 +2553,29 @@ export class RenderSystem {
    *
    * Selection is a partial sort — the pool is 4-8 entries, so an insertion pass
    * over the submissions is cheaper than sorting them and allocates nothing.
-   * Each slot then cross-fades between whatever it held and whatever it won, so
-   * a light losing its slot to a passing car dims out over ~0.15 s rather than
-   * blinking. The pool's `visible` flags are never touched.
+   *
+   * ASSIGNMENT IS KEY-STABLE, NOT RANK-INDEXED. The winners used to be copied
+   * into the pool BY RANK — winner i into slot i — which meant one new
+   * high-scoring transient (a flare leaving the muzzle outranks everything in
+   * its band) shifted every other winner down a slot, re-keyed all of them,
+   * and crossfaded the ENTIRE pool through black at once: the player's "part
+   * of the screen went dark for a moment". Measured on the night shot: the
+   * road pool under an established practical fell 87.6 -> 17.0 within three
+   * frames of firing, with every slot at intensity 0 in the same frame, and
+   * dipped AGAIN mid-flight each time the flare's decaying score crossed
+   * another winner's rank. (`src/render/slotprobe.mjs`; `?owNoSlotKeep=1` is
+   * that behaviour, kept as the probe's negative control.)
+   *
+   * So: a winner that already holds a slot KEEPS that slot; newcomers take
+   * free slots first; and a newcomer may evict only across priority bands
+   * (muzzle flash pri 8 / heli beam pri 6 still displace a pri-2 practical).
+   * Within a band an incumbent is never evicted — a flare arriving with every
+   * slot held by established practicals simply gets no punctual light and
+   * rides on its emissive shell + bloom, exactly like every other lamp in the
+   * city that did not make the cut. Each slot still cross-fades between
+   * whatever it held and whatever it won, so the one genuine eviction dims
+   * out over ~0.15 s rather than blinking, and nothing else moves at all.
+   * The pool's `visible` flags are never touched.
    */
   _assignLightSlots(dt) {
     const n = this.lightSlots;
@@ -2539,18 +2599,79 @@ export class RenderSystem {
       if (j < n) best[j] = i;
     }
 
+    // ---- match winners to slots -----------------------------------------
+    const win = this._slotWin; // slot index -> winner rank, -1 = none
+    const taken = this._winTaken; // winner rank -> already placed
+    const pool = this._pool;
+    for (let i = 0; i < n; i++) win[i] = -1;
+    if (this._noSlotKeep) {
+      // Legacy rank-indexed assignment, for the negative control only.
+      for (let w = 0; w < count; w++) win[w] = w;
+    } else {
+      for (let w = 0; w < count; w++) taken[w] = 0;
+      // Phase 1: a winner that already holds a slot keeps it.
+      for (let w = 0; w < count; w++) {
+        const key = req[best[w]].key;
+        for (let i = 0; i < n; i++) {
+          if (win[i] === -1 && pool[i].key === key) {
+            win[i] = w;
+            taken[w] = 1;
+            break;
+          }
+        }
+      }
+      // Phase 2: newcomers, in score order. Free slots first; then a live
+      // occupant of a LOWER priority band (dimmest band first, most-faded
+      // first). A same-band incumbent is never evicted: the newcomer just
+      // goes unlit this frame and its emissive material carries it.
+      for (let w = 0; w < count; w++) {
+        if (taken[w]) continue;
+        const pw = req[best[w]].priority;
+        let free = -1;
+        let freeLvl = Infinity;
+        let evict = -1;
+        let evictPri = Infinity;
+        let evictLvl = Infinity;
+        for (let i = 0; i < n; i++) {
+          if (win[i] !== -1) continue;
+          const s = pool[i];
+          if (s.key === -1 || s.level < 0.02) {
+            if (s.level < freeLvl) {
+              free = i;
+              freeLvl = s.level;
+            }
+          } else if (s.priority < pw) {
+            if (s.priority < evictPri || (s.priority === evictPri && s.level < evictLvl)) {
+              evict = i;
+              evictPri = s.priority;
+              evictLvl = s.level;
+            }
+          }
+        }
+        const i = free >= 0 ? free : evict;
+        if (i >= 0) {
+          win[i] = w;
+          taken[w] = 1;
+        }
+      }
+    }
+
     const k = 1 - Math.exp(-dt * 14); // ~0.15 s to swap a slot
     const gain = this.settings.practicalGain;
     for (let i = 0; i < n; i++) {
-      const slot = this._pool[i];
+      const slot = pool[i];
       const l = slot.light;
-      if (i < count) {
-        const e = req[best[i]];
+      const w = win[i];
+      if (w >= 0) {
+        const e = req[best[w]];
         if (slot.key !== e.key) {
-          // A different emitter wants this slot. Fade the old one out first,
+          // A different emitter won this slot. Fade the old one out first,
           // then take the position over, so nothing ever teleports lit.
           slot.level = Math.max(0, slot.level - k * 2);
-          if (slot.level < 0.02) slot.key = e.key;
+          if (slot.level < 0.02) {
+            slot.key = e.key;
+            slot.priority = e.priority;
+          }
           l.intensity = slot.level * slot.applied;
           continue;
         }
@@ -2565,12 +2686,16 @@ export class RenderSystem {
         l.color.setRGB(e.r, e.g, e.b);
         l.distance = e.range;
         slot.applied = e.intensity * fade * (e.priority >= 5 ? 1 : gain);
+        slot.priority = e.priority;
         slot.level += (1 - slot.level) * k;
         l.intensity = slot.level * slot.applied;
       } else {
         slot.level = Math.max(0, slot.level - k);
         l.intensity = slot.level * (slot.applied ?? 0);
-        if (slot.level < 0.02) slot.key = -1;
+        if (slot.level < 0.02) {
+          slot.key = -1;
+          slot.priority = 0;
+        }
       }
     }
     this._nReq = 0;

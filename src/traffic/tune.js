@@ -62,6 +62,24 @@ export const TUNE = {
   cornerMin: 3.2,
   /** How far ahead the corner planner looks. */
   cornerHorizon: 140,
+  /**
+   * Speed through a dead-end U-turn (path turn > 2.2 rad). Deliberately UNDER
+   * `cornerMin`: a pi at full lock is a 4.2 m-radius arc, wider than a
+   * street's half-carriageway, and the only way it stays on the road is at a
+   * crawl. See `_pathSpeed`.
+   */
+  uturnSpeed: 2.2,
+  /**
+   * Cross-track error (m) past which the driver recovers the lane before
+   * recovering speed, and the floor that cap never goes under. See
+   * `_longitudinal` — cap = max(floor, 10.5 - 1.5 * (err - recoverLat)).
+   * `recoverBrake` bounds how far below the CURRENT speed the cap may pull
+   * the target in one tick's demand — the glide that keeps the front tyres
+   * gripping while the car steers back to its lane.
+   */
+  recoverLat: 1.4,
+  recoverFloor: 3.2,
+  recoverBrake: 1.6,
 
   /* -------------------------------------------------------- junctions -- */
   /** Stop line, metres back from the junction node. */

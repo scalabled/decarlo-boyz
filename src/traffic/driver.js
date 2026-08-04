@@ -355,7 +355,47 @@ export class Driver {
     } else {
       this._badLink = 0;
     }
-    const raw = this._proj.lateral;
+    let raw = this._proj.lateral;
+    /**
+     * ADOPT THE LANE THE CAR IS ACTUALLY IN. A junction exit picks a lane
+     * once, and physics does not always deliver the car to it — a cut corner,
+     * an evade, a shunt, and the car is driving a perfectly good NEIGHBOURING
+     * lane while the controller steers for one two lanes over, across the
+     * whole carriageway. The belief is wrong, not the driving: update it.
+     * Bookkeeping only — no blend, no indicator — and only while genuinely
+     * mid-block, inside the carriageway, and not mid-manoeuvre, so a real
+     * lane change or avoid shift is never mistaken for occupancy.
+     */
+    if (this._count > 0 && !this.sys.debugNoLaneAdopt &&
+        this._laneBlend === 0 && this._avoid === 0 && this._swerve === 0) {
+      const e = this._edge(0);
+      const lane = this._lane(0);
+      const len = this._llen[this._slot(0)];
+      if (this._s > 10 && len - this._s > 10 && Math.abs(raw) > e.laneWidth * 0.7) {
+        const dir = L.laneDir(e, lane);
+        const lo = L.laneLo(e, dir);
+        const hi = L.laneHi(e, dir);
+        if (hi > lo) {
+          // Travel-right offset of the CAR from the road centreline.
+          const c = raw + L.laneOffset(e, lane) * dir;
+          if (Math.abs(c) < L.halfWidth(e)) {
+            let best = lane;
+            let bestD = Math.abs(raw);
+            for (let k = lo; k <= hi; k++) {
+              const d = Math.abs(c - L.laneOffset(e, k) * dir);
+              if (d < bestD) { bestD = d; best = k; }
+            }
+            if (best !== lane) {
+              this._ll[this._slot(0)] = best;
+              raw += (L.laneOffset(e, lane) - L.laneOffset(e, best)) * dir;
+              // The error just jumped by a lane width of pure bookkeeping;
+              // do not let the derivative term read it as motion.
+              this._lat = raw - this._laneBlend - this._avoid;
+            }
+          }
+        }
+      }
+    }
     this._latPrev = this._lat;
     this._lat = raw - this._laneBlend - this._avoid;
   }
@@ -624,6 +664,15 @@ export class Driver {
         // Radius the lane geometry actually offers through the junction.
         const R = Math.max(4.5, (a.laneWidth * 2.15) / Math.tan(Math.min(1.45, turn * 0.5)));
         vc = Math.min(vc, Math.max(TUNE.cornerMin, Math.sqrt(TUNE.cornerLat * R)));
+        /**
+         * A DEAD-END U-TURN IS NOT A CORNER, and `cornerMin` must not floor it
+         * UP. A pi-turn at full lock is an arc of ~4.2 m radius — wider than a
+         * street's half-carriageway — so the only thing that keeps the arc on
+         * the road is doing it at a crawl and correcting as it goes. At the
+         * old floor (3.85 m/s through the pi) cars swung off the ends of the
+         * bridge decks at the top of the ramp.
+         */
+        if (turn > 2.2 && !this.sys.debugNoRecoverCap) vc = TUNE.uturnSpeed;
       }
       if (vc < curve) curve = vc;
       const allow = Math.sqrt(vc * vc + 2 * TUNE.cornerBrake * Math.max(0, d));
@@ -1086,6 +1135,34 @@ export class Driver {
     // A wet road is a slower road.
     v0 *= this.sys.gripScale;
     if (this._approachCap < v0) v0 = this._approachCap;
+    /**
+     * RECOVER THE LANE BEFORE RECOVERING THE SPEED.
+     *
+     * A car leaves a junction cutting the corner, so its cross-track error on
+     * the new link starts at metres — and the moment the corner planner's cap
+     * expires, the target snaps back to the road limit and the car ACCELERATES
+     * while still metres off its lane. MEASURED before this cap: cars at 0.87
+     * throttle with |lat| 6 m, reason 'free', crossing the kerb of a 7.2 m
+     * street at 15+ m/s, and pure pursuit's convergence only gets shallower
+     * with speed (Ld grows with v). Holding the target down until the error is
+     * back under control turns a kerb-crossing sweep into a short tuck-in.
+     * The cap does not touch deliberate offsets: `_lat` already has the lane
+     * change blend and the static-avoid shift subtracted.
+     */
+    const latE = Math.abs(this._lat) - Math.abs(this._swerve);
+    if (latE > TUNE.recoverLat) {
+      const cap = Math.max(TUNE.recoverFloor, 10.5 - 1.5 * (latE - TUNE.recoverLat));
+      /**
+       * GLIDE down to the cap, never slam. Setting v0 far below the current
+       * speed makes the IDM free term command full brake, locked wheels have
+       * no lateral grip, and the car plows STRAIGHT ON at full steering lock —
+       * measured doing exactly that on the Fort Pitt deck: brake 1.0, steer
+       * -1.0, cross-track error GROWING. Tracking `speed - recoverBrake`
+       * bounds the demanded deceleration to a rate that leaves the front
+       * tyres their cornering grip, which is the whole point of slowing.
+       */
+      if (cap < v0) v0 = Math.max(cap, speed - TUNE.recoverBrake);
+    }
     this.diag.targetSpeed = v0;
 
     const free = A * (1 - Math.pow(speed / Math.max(1.2, v0), TUNE.idmDelta));

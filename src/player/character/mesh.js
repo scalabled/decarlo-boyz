@@ -760,27 +760,80 @@ export function buildBody(build) {
       weight: single('hand' + side),
     });
 
-    // Short sleeve: a separate garment shell that ends in a rolled hem.
+    // Short sleeve: a set-in garment shell. It CAPS over the top of the
+    // shoulder (the acromion / deltoid crown) and then falls to a rolled hem
+    // partway down the upper arm.
+    //
+    // WHY THE TOP IS CLOSED. The upper arm is drawn in skin, and its crown sits
+    // proud of the shoulder at sh.y + 0.052. The old sleeve started INBOARD and
+    // LOW (sh.x - 0.085, sh.y - 0.004), open at both ends, so it never domed
+    // over that crown: a ring of bare skin showed at the acromion where the
+    // sleeve met the torso, and it widened as the arm lifted because the torso
+    // (chest-weighted) receded from under the shoulder while the crown did not.
+    // Measured exposed superior-shoulder skin was ~10-15k mm2 at rest, ~30k
+    // raised. The cap is weighted 100% to the arm bone, exactly like the skin
+    // crown it covers, so the two are locked together: a cap that clears the
+    // crown in the bind pose clears it under EVERY arm rotation, not just rest.
+    // `src/player/character/shirtprobe.mjs` is the gate.
+    //
+    // The hem is still a rolled, OPEN edge partway down the upper arm, so the
+    // bare forearm-side of the arm still reads through it — only the TOP closed.
+    //
+    // NEGATIVE CONTROL for the gate: `build.sleeveShrink === true` reverts this
+    // to the pre-fix sleeve — inboard, low, open at the top — which re-opens the
+    // acromion gap. `shirtprobe.mjs` builds one pass with it set and asserts the
+    // exposed-skin count goes RED, proving the gate measures the emitted cap and
+    // not its own inputs. Same idiom as `debugIgnorePause` in the pause gates.
+    const sleeveShrink = build.sleeveShrink === true;
     B.tube({
       material: MAT.shirt,
-      path: [
+      path: sleeveShrink ? [
         [sh[0] - s * 0.085 * S, sh[1] - 0.004 * S, sh[2] - 0.004 * S],
         [sh[0] - s * 0.010 * S, sh[1] - 0.012 * S, sh[2]],
         [lerp(sh[0], el[0], 0.40), lerp(sh[1], el[1], 0.40), lerp(sh[2], el[2], 0.40)],
         [lerp(sh[0], el[0], 0.50), lerp(sh[1], el[1], 0.50), lerp(sh[2], el[2], 0.50)],
+      ] : [
+        // apex: a cap riding proud of the deltoid crown, centred over it (the
+        // skin crown sits at sh.x - 0.012, sh.y + 0.052) so it domes SYMMETRIC-
+        // ally over the top rather than swinging off the outboard side. The
+        // height matters: dropped to +0.065 the crown pokes back through at rest
+        // on the broadest brother (carson, shoulder 1.11) — measured 67 rays —
+        // so +0.076 is the margin the widest deltoid needs, not slack.
+        [sh[0] - s * 0.012 * S, sh[1] + 0.076 * S, sh[2] + 0.004 * S],
+        // superior shoulder, still tracking the arm axis so the whole crown is
+        // enclosed on the inboard side too
+        [sh[0] - s * 0.004 * S, sh[1] + 0.032 * S, sh[2] + 0.000 * S],
+        // onto the upper deltoid
+        [lerp(sh[0], el[0], 0.12), lerp(sh[1], el[1], 0.12), lerp(sh[2], el[2], 0.12)],
+        // deltoid belly
+        [lerp(sh[0], el[0], 0.34), lerp(sh[1], el[1], 0.34), lerp(sh[2], el[2], 0.34)],
+        // toward the hem
+        [lerp(sh[0], el[0], 0.46), lerp(sh[1], el[1], 0.46), lerp(sh[2], el[2], 0.46)],
+        // rolled hem, partway down the upper arm (open — the arm shows below it)
+        [lerp(sh[0], el[0], 0.52), lerp(sh[1], el[1], 0.52), lerp(sh[2], el[2], 0.52)],
       ],
-      rings: 14,
+      rings: sleeveShrink ? 14 : 20,
       radial: 16,
       uvV: 12,
       uvU: 6,
-      radius: (t) => {
-        // Open at both ends: the arm inside is what you should see through the
-        // shoulder seam and the hem, not a flat capping disc.
-        const r = prof(t, [
-          [0.00, 0.052], [0.16, 0.064], [0.34, 0.062], [0.70, 0.053], [0.90, 0.050], [1.00, 0.054],
-        ]) * G;
-        return mk(r * S, r * 1.04 * S);
-      },
+      // capStart closes the apex over the acromion; the hem (capEnd) stays open.
+      capStart: !sleeveShrink,
+      radius: sleeveShrink
+        ? (t) => {
+            const r = prof(t, [
+              [0.00, 0.052], [0.16, 0.064], [0.34, 0.062], [0.70, 0.053], [0.90, 0.050], [1.00, 0.054],
+            ]) * G;
+            return mk(r * S, r * 1.04 * S);
+          }
+        : (t) => {
+            // Generous through the cap so it clears the skin crown (r up to
+            // 0.055) with margin, tapering to the rolled hem.
+            const r = prof(t, [
+              [0.00, 0.034], [0.09, 0.060], [0.22, 0.070], [0.42, 0.065],
+              [0.70, 0.055], [0.90, 0.051], [1.00, 0.055],
+            ]) * G;
+            return mk(r * S, r * 1.04 * S);
+          },
       weight: chain([[0, 'arm' + side], [0.1, 'arm' + side], [1, 'arm' + side]]),
     });
   }

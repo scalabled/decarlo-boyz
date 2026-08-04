@@ -206,6 +206,10 @@ export class FreeRoam {
     this._sprayHot = 0;
     this.packagesSeeded = false;
 
+    /** The flyable fleet parked at the airfields, spawned once. See below. */
+    this._airportSeeded = false;
+    this._airportVehicles = [];
+
     // See `_respray`: `police` owns the same shop at the same coordinates and
     // updates first, so the stars can already be gone by the time this system
     // looks. A clear TO zero is therefore also evidence that the player drove
@@ -281,6 +285,49 @@ export class FreeRoam {
       ui?.notify?.('All packages found', 'NITRO LAUNCHER UNLOCKED', 'gold');
     }
     this.onSave?.();
+  }
+
+  /* ==================================================================== */
+  /* the airfield fleet                                                   */
+  /* ==================================================================== */
+
+  /**
+   * Park the flyable fleet at the two airfields, once, as soon as the world is
+   * up: a fixed-wing SKYLARK on each runway — backed up to a threshold with the
+   * whole strip ahead of it and its nose pointing down the centreline, ready to
+   * build speed and rotate — and a RIVERHOP helicopter on the apron beside it.
+   *
+   * Both are ordinary spawns with no mission tag, so nothing despawns them, and
+   * both are ENTERABLE through the very same F scan a car is: `_vehicleNear`
+   * offers whatever `vehicles.nearest(..., TAKEABLE)` returns, and `TAKEABLE`
+   * rejects only a destroyed vehicle. Walk up to either and the prompt reads
+   * TAKE THE SKYLARK / TAKE THE RIVERHOP.
+   *
+   * The runway HEADING and EXTENT are READ from `world.airfields`, never
+   * duplicated here — one owner for a spatial fact (ARCHITECTURE.md rule 12).
+   * `world` is a static dep of `game`, so it is always up by the time free roam
+   * runs a frame; the guard below simply waits for the first frame it can see it.
+   */
+  _seedAirportVehicles() {
+    if (this._airportSeeded) return;
+    const fields = this.wq.world?.airfields;
+    const vs = this.wq.vehicles;
+    if (!fields?.length || typeof vs?.spawn !== 'function') return;
+    this._airportSeeded = true;
+    for (const af of fields) {
+      const c = Math.cos(af.yaw), s = Math.sin(af.yaw);
+      const len = af.runway?.[0] ?? 400;
+      const wid = af.runway?.[1] ?? 80;
+      // Down-runway offset (nose points this way) and the perpendicular apron.
+      const along = (d) => [af.x + s * d, af.z + c * d];
+      const beside = (d, a) => [af.x + c * d + s * a, af.z - s * d + c * a];
+      const [px, pz] = along(-len * 0.32);
+      const plane = this.wq.spawnVehicle('plane', px, pz, af.yaw);
+      const [hx, hz] = beside(wid * 0.5 + 12, len * 0.12);
+      const heli = this.wq.spawnVehicle('heli', hx, hz, af.yaw);
+      if (plane) this._airportVehicles.push(plane);
+      if (heli) this._airportVehicles.push(heli);
+    }
   }
 
   /* ==================================================================== */
@@ -527,6 +574,7 @@ export class FreeRoam {
     this._missT = Math.max(0, this._missT - dt);
     this._sinceFire += dt;
     this._ambient(dt);
+    this._seedAirportVehicles();
     this._restoreRadio();
     this._publishDifficulty();
 

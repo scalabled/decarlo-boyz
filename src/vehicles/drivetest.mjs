@@ -70,7 +70,8 @@ const DT = 1 / 120;
  * that do not describe it.
  */
 const CAR_TYPES = Object.keys(VEHICLE_SPECS).filter(
-  (k) => VEHICLE_SPECS[k].kind !== 'boat' && VEHICLE_SPECS[k].kind !== 'heli'
+  (k) => VEHICLE_SPECS[k].kind !== 'boat' && VEHICLE_SPECS[k].kind !== 'heli' &&
+    VEHICLE_SPECS[k].kind !== 'plane'
 );
 // `--type=heli` must still reach section 11 without being dragged through the
 // nine wheeled ones — filter the selection rather than trusting the caller.

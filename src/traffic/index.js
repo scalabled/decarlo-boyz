@@ -608,6 +608,9 @@ export class TrafficSystem {
     let dir = fx * e.dx + fz * e.dz >= 0 ? 1 : -1;
     if (!L.drivable(e, dir)) dir = -dir;
     if (!L.drivable(e, dir)) return false;
+    // Never RE-seat a car aimed into a trap (a run of road committing it to a
+    // dead-end U-turn) when the other direction works — see LaneNet._computeTraps.
+    if (L.isTrap(e, dir) && L.drivable(e, -dir) && !L.isTrap(e, -dir)) dir = -dir;
     const lane = L.laneHi(e, dir);
     L.project(e, lane, v.position.x, v.position.z, this._proj);
     const s = clamp(this._proj.s, 1, e.len - 1);

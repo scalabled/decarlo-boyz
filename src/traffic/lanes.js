@@ -33,6 +33,13 @@ const PARK_INSET = 1.30;
 /** Carriageway a bay eats. */
 const PARK_BAND = 2.45;
 
+/**
+ * The sharpest junction turn a driver will attempt. Mirrors the refusal in
+ * `successor()`: anything past ~115 degrees is a U-turn in disguise and no
+ * junction lane geometry supports it.
+ */
+const MAX_TURN = 2.0;
+
 export class LaneNet {
   constructor() {
     this.roads = null;
@@ -40,6 +47,10 @@ export class LaneNet {
     this._flags = null;
     this._rank = null;
     this._limit = null;
+    /** Per-edge lane-data sanity, computed once in attach(). */
+    this._sane = null;
+    /** Per-DIRECTED-edge trap flag (edge.id*2 + (dir>0?0:1)), see _computeTraps. */
+    this._trap = null;
     /** Usable lane ranges per direction, inclusive. */
     this._fwLo = null;
     this._fwHi = null;
@@ -52,6 +63,11 @@ export class LaneNet {
     this._candL = new Int32Array(12);
     this._candW = new Float32Array(12);
     this._candTurn = new Float32Array(12);
+    /** Scratch for candidates that lead into a trap — used only as a last resort. */
+    this._trapE = new Int32Array(12);
+    this._trapL = new Int32Array(12);
+    this._trapW = new Float32Array(12);
+    this._trapTurn = new Float32Array(12);
     this._pick = { edge: null, lane: 0, turn: 0 };
     /**
      * Edges the fleet has learned are impassable — a building collider across
@@ -60,6 +76,12 @@ export class LaneNet {
      * expire so a temporary obstruction (a wreck) is forgotten.
      */
     this.blocked = new Map();
+    /**
+     * NEGATIVE-CONTROL hatch for the harness: disables the trap refusal in
+     * `successor()` against the live code, no edit needed. Same pattern as
+     * `debugIgnorePause` in freeroam/weapons (see ARCHITECTURE.md).
+     */
+    this.debugNoTrapGuard = false;
   }
 
   get ready() {
@@ -77,6 +99,7 @@ export class LaneNet {
     this._flags = new Uint8Array(n);
     this._rank = new Uint8Array(n);
     this._limit = new Float32Array(n);
+    this._sane = new Uint8Array(n);
     this._fwLo = new Int8Array(n);
     this._fwHi = new Int8Array(n);
     this._bwLo = new Int8Array(n);
@@ -87,6 +110,27 @@ export class LaneNet {
       const e = roads.edges[i];
       this._rank[i] = KIND_RANK[e.kind] ?? 1;
       this._limit[i] = KIND_LIMIT[e.kind] ?? 11;
+      /**
+       * LANE-DATA SANITY, once per edge. A driver steered by garbage geometry
+       * — a zero laneWidth, a NaN direction, a lane centre off in space —
+       * produces garbage steering with no error anywhere, so an edge that
+       * fails this is simply never routed onto, never spawned onto, and never
+       * chosen by a successor. `world` welds new link edges onto the graph
+       * (`lm_*_link`); this is the traffic-side guarantee that whatever
+       * arrives, a driver only ever steers to finite, plausible lane data.
+       */
+      const na = roads.nodes[e.a];
+      const nb = roads.nodes[e.b];
+      this._sane[i] =
+        Number.isFinite(e.len) && e.len > 0.5 &&
+        Number.isFinite(e.laneWidth) && e.laneWidth > 1.5 && e.laneWidth < 8 &&
+        Number.isFinite(e.width) && e.width > 2.5 &&
+        e.lanes >= 1 && e.forward >= (e.oneway ? e.lanes : 1) &&
+        Number.isFinite(e.dx) && Number.isFinite(e.dz) &&
+        Math.abs(Math.hypot(e.dx, e.dz) - 1) < 0.01 &&
+        !!na && !!nb &&
+        Number.isFinite(na.x + na.z + na.y) && Number.isFinite(nb.x + nb.z + nb.y)
+          ? 1 : 0;
 
       const fw = e.forward;
       const bw = e.lanes - fw;
@@ -122,7 +166,74 @@ export class LaneNet {
       const l = Math.hypot(a.x, a.z) || 1;
       this.corridorAxis.set(id, { x: a.x / l, z: a.z / l });
     }
+    this._computeTraps();
     return true;
+  }
+
+  /**
+   * TRANSITIVE TRAP MAP, one bit per directed edge, computed once per graph.
+   *
+   * A directed edge is a TRAP when driving it commits the car to a dead-end
+   * U-turn somewhere ahead with no junction offering a way out in between: its
+   * far node has no acceptable continuation (degree-1, or every arm sharper
+   * than MAX_TURN or not drivable), or every acceptable continuation is itself
+   * a trap. The transitive half is the whole point — the north half of the
+   * Fort Duquesne deck is ~400 m of degree-2 bends ending at a degree-1 node,
+   * so a one-step test at the entry junction sees "an exit" nine times in a
+   * row and still delivers the car to a pi-turn over the river.
+   *
+   * Monotone fixpoint: flags only ever flip false -> true, so it terminates in
+   * at most (longest cul-de-sac chain) passes; the whole city settles in a
+   * handful. `blocked` is deliberately NOT consulted here — it is dynamic and
+   * expires; `successor()` already skips blocked candidates live.
+   */
+  _computeTraps() {
+    const roads = this.roads;
+    const n = roads.edges.length;
+    this._trap = new Uint8Array(n * 2);
+    const trap = this._trap;
+    const yawOf = (e, d) => Math.atan2(e.dx * d, e.dz * d);
+    let changed = true;
+    let guard = 0;
+    while (changed && guard++ < 200) {
+      changed = false;
+      for (let i = 0; i < n; i++) {
+        const e = roads.edges[i];
+        if (e.rail || !this._sane[i]) continue;
+        for (let k = 0; k < 2; k++) {
+          const dir = k === 0 ? 1 : -1;
+          const idx = i * 2 + k;
+          if (trap[idx]) continue;
+          if (!this.drivable(e, dir)) continue;
+          const far = dir > 0 ? e.b : e.a;
+          const node = roads.nodes[far];
+          let out = false;
+          if (node) {
+            const inYaw = yawOf(e, dir);
+            for (let j = 0; j < node.links.length; j++) {
+              const e3 = roads.edges[node.links[j]];
+              if (!e3 || e3 === e || e3.rail) continue;
+              const d3 = e3.a === far ? 1 : e3.b === far ? -1 : 0;
+              if (d3 === 0 || !this.drivable(e3, d3)) continue;
+              if (Math.abs(wrapPi(yawOf(e3, d3) - inYaw)) > MAX_TURN) continue;
+              if (trap[e3.id * 2 + (d3 > 0 ? 0 : 1)]) continue;
+              out = true;
+              break;
+            }
+          }
+          if (!out) {
+            trap[idx] = 1;
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  /** Does driving (edge, dir) commit the car to a dead-end U-turn ahead? */
+  isTrap(edge, dir) {
+    if (!this._trap) return false;
+    return this._trap[edge.id * 2 + (dir > 0 ? 0 : 1)] === 1;
   }
 
   /* ------------------------------------------------------------ lanes -- */
@@ -162,9 +273,16 @@ export class LaneNet {
   /** True when a driver may legally travel `dir` along this edge at all. */
   drivable(edge, dir) {
     if (edge.rail) return false;
+    if (this._sane && !this._sane[edge.id]) return false;
     if (edge.oneway && dir < 0) return false;
     return this.laneHi(edge, dir) >= this.laneLo(edge, dir);
   }
+
+  /** Did this edge pass the once-per-attach lane-data sanity screen? */
+  sane(edge) {
+    return !this._sane || !!this._sane[edge.id];
+  }
+
 
   /** Bay present on the right of a->b (bit 1) / left of a->b (bit 2). */
   parkFlags(edge) {
@@ -285,6 +403,8 @@ export class LaneNet {
     const wantKind = opts?.kind ?? null;
     let n = 0;
     let total = 0;
+    let trapN = 0;
+    let trapTotal = 0;
 
     for (let i = 0; i < node.links.length && n < this._candE.length; i++) {
       const e2 = roads.edges[node.links[i]];
@@ -301,19 +421,53 @@ export class LaneNet {
       // Straight is by far the most likely; a U-turn-ish link is nearly never.
       // A junction turn sharper than ~115 degrees is a U-turn in disguise and
       // no lane geometry supports it; refuse rather than let a car try.
-      if (at > 2.0) continue;
+      if (at > MAX_TURN) continue;
       let w = at < 0.35 ? 5.0 : at < 1.0 ? 1.8 : 0.75;
       w *= 0.55 + 0.5 * (this._rank[e2.id] + 1);
       if (e2.corridor && e2.corridor === edge.corridor) w *= 3.4;
       if (wantKind && e2.kind === wantKind) w *= 2.0;
       if (e2.kind === 'alley') w *= 0.15;
       if (e2.len < 12) w *= 0.4;
+      /**
+       * Never route INTO a trap while any other way exists — see
+       * `_computeTraps`. A trap delivers the car to a dead-end U-turn: a
+       * pi-turn at full lock is a ~4.2 m-radius arc, wider than a street's
+       * half-carriageway. MEASURED before this guard: 32% of off-carriageway
+       * samples and ~36% of collision events carried a queued U-turn
+       * (downtown, 3 min, budget 38) — cars arcing off the terminal halves of
+       * the Fort Pitt / Fort Duquesne decks and shuttling through a welded
+       * stub whose only continuation is 2.18 rad. Kept as a separate
+       * last-resort pool rather than simply skipped: a car whose every
+       * candidate is a trap still needs to move, and entering one slowly
+       * beats stopping dead in the junction.
+       */
+      if (!this.debugNoTrapGuard && this.isTrap(e2, dir)) {
+        if (trapN < this._trapE.length) {
+          this._trapE[trapN] = e2.id;
+          this._trapL[trapN] = lane2;
+          this._trapTurn[trapN] = turn;
+          this._trapW[trapN] = w;
+          trapTotal += w;
+          trapN++;
+        }
+        continue;
+      }
       this._candE[n] = e2.id;
       this._candL[n] = lane2;
       this._candTurn[n] = turn;
       this._candW[n] = w;
       total += w;
       n++;
+    }
+
+    if (n === 0 && trapN > 0) {
+      // Last resort: every acceptable arm leads into a trap. Take one anyway.
+      this._candE.set(this._trapE.subarray(0, trapN));
+      this._candL.set(this._trapL.subarray(0, trapN));
+      this._candTurn.set(this._trapTurn.subarray(0, trapN));
+      this._candW.set(this._trapW.subarray(0, trapN));
+      n = trapN;
+      total = trapTotal;
     }
 
     if (n === 0) {

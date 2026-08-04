@@ -939,7 +939,7 @@ export class VehicleSystem {
   getHudState() {
     const v = this._playerVehicle();
     if (!v) return null;
-    const flying = v.spec.kind === 'heli';
+    const flying = v.spec.kind === 'heli' || v.spec.kind === 'plane';
     return {
       inVehicle: true,
       type: v.type ?? v.spec.id,

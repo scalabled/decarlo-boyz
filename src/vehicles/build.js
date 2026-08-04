@@ -50,6 +50,7 @@ import { buildWheel, buildBikeChassis } from './wheels.js';
 import { buildInterior, buildBoatInterior } from './interior.js';
 import { buildBoatHull } from './boat.js';
 import { buildHeliBody } from './heli.js';
+import { buildPlaneBody } from './plane.js';
 import { mergeAll, transform, triCount, bakeBoxUV, bakePolarUV } from './geom.js';
 
 const LOD_COUNT = 4;
@@ -85,6 +86,7 @@ function geometryFor(spec, lod) {
   if (spec.kind === 'bike') body = buildBikeChassis(spec, lod);
   else if (spec.kind === 'boat') body = buildBoatHull(spec, lod);
   else if (spec.kind === 'heli') body = buildHeliBody(spec, lod);
+  else if (spec.kind === 'plane') body = buildPlaneBody(spec, lod);
   else body = buildCarBody(spec, lod);
 
   // The helicopter carries its own cabin (floor, seats, sticks) inside
@@ -93,7 +95,7 @@ function geometryFor(spec, lod) {
   // against a sill — and a glazed pod has none of those surfaces to hang them on.
   const interior =
     spec.kind === 'boat' ? buildBoatInterior(spec, lod)
-      : spec.kind === 'bike' || spec.kind === 'heli'
+      : spec.kind === 'bike' || spec.kind === 'heli' || spec.kind === 'plane'
         ? { seat: [], leather: [], dash: [], trim: [], chrome: [], cavity: [] }
         : buildInterior(spec, lod);
 
@@ -187,7 +189,8 @@ function geometryFor(spec, lod) {
   }
   if (merged.cavity.attributes?.position) bakeBoxUV(merged.cavity);
 
-  const wheelGeo = spec.kind === 'boat' || spec.kind === 'heli' ? null : buildWheelGeo(spec, lod);
+  const wheelGeo = spec.kind === 'boat' || spec.kind === 'heli' || spec.kind === 'plane'
+    ? null : buildWheelGeo(spec, lod);
 
   // Doors are their own meshes — they have to move independently — and are
   // built for LOD0 only. Same class-level cache as everything else, so forty
@@ -558,7 +561,7 @@ export function buildVehicleModel(spec, mats, opts = {}) {
 
   // ---- wheels ------------------------------------------------------------
   const wheels = [];
-  if (spec.kind !== 'boat' && spec.kind !== 'heli') {
+  if (spec.kind !== 'boat' && spec.kind !== 'heli' && spec.kind !== 'plane') {
     for (const hp of spec.wheels) {
       const node = new THREE.Group();
       node.name = `wheel${hp.index}`;

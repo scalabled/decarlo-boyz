@@ -1765,11 +1765,21 @@ function buildGraph(corridors, terrain) {
       const a = chain[i];
       const b = chain[i + 1];
       if (a === b) continue;
-      // Skip a duplicate edge between the same pair.
+      // Skip a duplicate edge between the same pair — but ONLY one of the same
+      // kind. A rail edge is not a duplicate of a coincident ROAD edge: a
+      // trolley cannot run on the arterial that shares its ground, so dropping
+      // it here severs the line. Mill trackage runs within WELD (7 m) of the
+      // road grid, so its chain nodes weld onto road junctions; where two
+      // consecutive welded nodes already carried a road edge, this test used to
+      // eat the rail edge and dead-end the track mid-intersection (the
+      // Lawrenceville break: `rail_strip` fell into 7 disconnected pieces, one
+      // dangling end at every crossing). Keying the dup on `rail`-ness keeps the
+      // track continuous through the junction while still collapsing genuine
+      // road-on-road and rail-on-rail doubles.
       let dup = false;
       for (let k = 0; k < a.links.length; k++) {
         const e = graph.edges[a.links[k]];
-        if (e.a === b.id || e.b === b.id) dup = true;
+        if ((e.a === b.id || e.b === b.id) && !!e.rail === !!c.rail) dup = true;
       }
       if (dup) continue;
       graph.addEdge(a.id, b.id, {
