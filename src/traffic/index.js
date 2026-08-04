@@ -90,6 +90,17 @@ export class TrafficSystem {
 
     this.movingShare = MOVING_SHARE;
     /**
+     * NEGATIVE-CONTROL hatches for the harness, all default-off — they let
+     * `harness.mjs --control` re-create the crash-up-derby behaviour against
+     * the LIVE code with no edit (same pattern as `debugIgnorePause`):
+     *   debugNoRecoverCap  disables the off-lane recovery speed cap AND the
+     *                      dead-end U-turn crawl in Driver._pathSpeed
+     *   debugNoLaneAdopt   disables lane re-adoption in Driver._syncPath
+     *   lanes.debugNoTrapGuard  disables trap refusal in LaneNet.successor
+     */
+    this.debugNoRecoverCap = false;
+    this.debugNoLaneAdopt = false;
+    /**
      * Can a car in this build actually be made to go backwards? The first
      * driver that needs to reverse out of something finds out for everybody —
      * see `Driver._reverseOut`. `vehicles` owns the answer; we only measure it.

@@ -1150,7 +1150,7 @@ export class Driver {
      * change blend and the static-avoid shift subtracted.
      */
     const latE = Math.abs(this._lat) - Math.abs(this._swerve);
-    if (latE > TUNE.recoverLat) {
+    if (latE > TUNE.recoverLat && !this.sys.debugNoRecoverCap) {
       const cap = Math.max(TUNE.recoverFloor, 10.5 - 1.5 * (latE - TUNE.recoverLat));
       /**
        * GLIDE down to the cap, never slam. Setting v0 far below the current
