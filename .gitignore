@@ -10,3 +10,8 @@ nodeonly.txt
 *.swp
 .idea/
 .vscode/
+# Verifier A/B scaffolding: detached git worktrees agents create to compare
+# the working tree against HEAD. Never ship; a nested .git staged by add -A
+# would become a bogus submodule gitlink.
+headtree/
+minetree/
