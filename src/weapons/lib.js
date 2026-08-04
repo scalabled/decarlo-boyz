@@ -388,8 +388,9 @@ export const CLASS_EXEMPLAR = {
  * Who carries what. Byte-identical to `src/ui/data.js`'s per-brother wheel
  * slots and to `src/game/data.js`'s `weapons` lists — the three tables have to
  * agree or the wheel offers a weapon the engine cannot draw. DESIGN.md is the
- * source: every brother starts with fists plus his own melee tool and unlocks
- * four more across his eight chapters.
+ * source: every brother starts with fists, his own melee tool and two ranged
+ * tools (so the game is shootable from the first minute), and unlocks the
+ * remaining two across his eight chapters.
  */
 export const BROTHER_LOADOUT = {
   carson: ['fists', 'pipe', 'flare', 'speargun', 'harpoon', 'depth'],
@@ -474,16 +475,16 @@ export const NEUTRAL_HANDLING = { spread: 1, recoil: 1, settle: 1, handling: 1, 
 /**
  * WHAT EACH BROTHER OWNS BEFORE HE HAS EARNED ANYTHING.
  *
- * DESIGN.md, "starts with": fists plus his own melee tool. The other four in
- * `BROTHER_LOADOUT` are the eight chapters' rewards and are NOT his until the
+ * "starts with": fists, his own melee tool and two ranged tools. The other two
+ * in `BROTHER_LOADOUT` are chapter rewards and are NOT his until the
  * save says so — see `WeaponSystem._resolveUnlocks`, which asks
  * `game.economy` rather than deciding for itself. Byte-identical to the
  * `start` arrays in `src/game/data.js`.
  */
 export const BROTHER_START = {
-  carson: ['fists', 'pipe'],
-  aidan: ['fists', 'wrench'],
-  dylan: ['fists', 'crowbar'],
+  carson: ['fists', 'pipe', 'flare', 'speargun'],
+  aidan: ['fists', 'wrench', 'nailgun', 'rivetgun'],
+  dylan: ['fists', 'crowbar', 'tackgun', 'smg'],
 };
 
 /**

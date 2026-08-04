@@ -52,29 +52,39 @@ export function drawWeaponGlyph(g, glyph, size, colour) {
       g.fillRect(20, 44, 4, 18);
       break;
 
-    case 'wrench':
+    case 'wrench': {
+      // combination wrench: box ring on the left, angled open jaw on the right
+      // handle
       g.beginPath();
-      g.moveTo(30, 46);
-      g.lineTo(76, 42);
-      g.lineTo(76, 58);
-      g.lineTo(30, 62);
+      g.moveTo(34, 44);
+      g.lineTo(66, 44);
+      g.lineTo(66, 56);
+      g.lineTo(34, 56);
       g.closePath();
       g.fill();
+      // box (ring) end — solid annulus, hole punched with even-odd
       g.beginPath();
-      g.moveTo(76, 30);
-      g.lineTo(94, 30);
-      g.lineTo(94, 44);
-      g.lineTo(84, 44);
-      g.lineTo(84, 56);
-      g.lineTo(94, 56);
-      g.lineTo(94, 70);
-      g.lineTo(76, 70);
+      g.arc(28, 50, 15, 0, Math.PI * 2);
+      g.arc(28, 50, 7.5, 0, Math.PI * 2, true);
+      g.fill('evenodd');
+      // open-end jaw — U-notch head tilted off the handle so it reads "open end"
+      g.save();
+      g.translate(70, 50);
+      g.rotate(-0.42);
+      g.beginPath();
+      g.moveTo(-14, -16);
+      g.lineTo(22, -16);
+      g.lineTo(22, -5);
+      g.lineTo(4, -5);
+      g.lineTo(4, 5);
+      g.lineTo(22, 5);
+      g.lineTo(22, 16);
+      g.lineTo(-14, 16);
       g.closePath();
       g.fill();
-      g.beginPath();
-      g.arc(24, 54, 13, 0, Math.PI * 2);
-      g.fill();
+      g.restore();
       break;
+    }
 
     case 'crow':
       g.beginPath();

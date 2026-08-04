@@ -73,6 +73,9 @@
  *   node src/world/drivesweep.mjs --nopadfix     the junction-pad union reverted
  *     holes 399.6 m -> 16 780.8 m FAIL · junction 3889 -> 5924 lines FAIL ·
  *     steps PASS · containment 7.79% -> 7.76% PASS
+ *   node src/world/drivesweep.mjs --nocapfix     the drive-surface coverage
+ *     fix reverted (union cap + full collision mouth): holes 258.0 m -> 399.6 m
+ *     FAIL against the <= 300 ratchet · steps and containment stay green
  *   node src/world/drivesweep.mjs --nokerbfix    the kerb-containment fix reverted
  *     containment 7.79% -> 10.28% FAIL · holes, steps and junction all PASS
  *     unchanged
@@ -113,21 +116,35 @@ const VERBOSE = !!args.verbose;
  * every lane centre and every lane edge `roads.laneCenter` hands out. Before
  * this pass / after it:
  *
- *   holes        16 780.8 m -> 399.6 m   9301 runs -> 163, worst 19.2 -> 12.0 m
- *   steps        12 833 -> 10 241        (see below: the measure changed too)
- *   junction     6256 lines -> 3889      6984 unsupported samples -> 799
- *   containment  11.75% -> 7.79%
+ *   holes        16 780.8 m -> 258.0 m   9301 runs -> 89, worst 19.2 -> 12.0 m
+ *   steps        12 833 -> 9839          (see below: the measure changed too)
+ *   junction     6256 lines -> 3579      6984 unsupported samples -> 795
+ *   containment  11.75% -> 7.87%
+ *
+ * The step from 399.6 m to 258.0 m (and the incidental fall in steps and
+ * junction) is the junction DRIVE-SURFACE coverage pass in `roadmesh._junction`
+ * — see `legacyCap()` there and the `--nocapfix` control below. It had two
+ * halves, both aimed at a wheel dropping into a junction pad: the union cap now
+ * follows the widest ARM's mouth corner `sqrt(R^2 + hw^2)` rather than
+ * `1.7 * maxR`, and the COLLISION mouth of each arm runs to its full
+ * `atan2(hw, R)` instead of being mitred to the corner bisector, which was
+ * orphaning a wedge of a wide-short arm's own carriageway (node 16's 4-lane
+ * arterial had a 60-degree mouth cut to 24 by a narrow neighbour 48 away).
  *
  * WHAT IS LEFT, AND WHOSE IT IS. Measured, not guessed:
  *
- *   holes 399.6 m   555 of the 666 samples are still at nodes with four or more
- *                   arms, and every one is inside a junction pad. What survives
- *                   the union fix is the `PAD_RMAX` cap: on a node whose arms
- *                   differ enormously in width the union boundary wants to
- *                   reach further than 1.7x the pad radius and is clipped. The
- *                   honest fix is to let the cap follow the widest ARM rather
- *                   than the pad, which is a `_junction` change and wants its
- *                   own pass
+ *   holes 258.0 m   366 of the 430 samples are still at nodes with four or more
+ *                   arms, and 421 of 430 are inside a junction pad. What remains
+ *                   is the RE-ENTRANT NOTCH where two carriageways cross: the
+ *                   union of the arms is the true outline of the crossing, and a
+ *                   lane the graph hands out through the notch corner has no
+ *                   asphalt because no asphalt belongs there. Closing these
+ *                   means either a rounded kerb corner OUTSIDE the notch
+ *                   (content work — `roadmesh._place`'s note says so) or a
+ *                   `netgen` change so `laneCenter` stops routing a lane across
+ *                   the notch. The worst offenders are short quay/parkway edges
+ *                   whose inset is scaled down by `_insetAt`, giving the wide
+ *                   mouths — a corridor-layout question, not a meshing one
  *   steps 10 241    8952 are inside a junction pad and 1289 mid-run. The mid-run
  *                   ones are NOT an emission defect: they are hillside
  *                   switchbacks where `netgen` lays two legs of ONE corridor
@@ -152,7 +169,7 @@ const VERBOSE = !!args.verbose;
  * 11 m to 2 m doubles the collision triangle count (818k -> 1570k) and moves
  * containment 7.80% -> 7.13%. Row pitch is not the problem.
  */
-const MAX_HOLE_M = Number(args.maxhole ?? 450);
+const MAX_HOLE_M = Number(args.maxhole ?? 300);
 const MAX_STEPS = Number(args.maxsteps ?? 10600);
 const MAX_JUNCTION_BAD = Number(args.maxjunc ?? 4100);
 const MAX_UNCONTAINED_PCT = Number(args.maxuncontained ?? 8.2);
@@ -203,6 +220,7 @@ try {
   if (args.nogapfix) extra += '&nogapfix=1';
   if (args.nokerbfix) extra += '&nokerbfix=1';
   if (args.nopadfix) extra += '&nopadfix=1';
+  if (args.nocapfix) extra += '&nocapfix=1';
   await page.goto(`http://127.0.0.1:${PORT}/?capture=1&lockstep=1&prewarm=0&q=high${extra}`, {
     waitUntil: 'domcontentloaded',
     timeout: 120000,

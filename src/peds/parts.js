@@ -630,8 +630,43 @@ const EYE_X = 0.0315;
 const EYE_Y = 0.0965;
 const EYE_R = 0.0130;
 
+/**
+ * Drop every triangle that lies ENTIRELY behind local z = `zMin`, then compact
+ * the mesh. Used to keep only the forward cap of the sclera: the rear hemisphere
+ * of a full eyeball is buried in the skull, contributes nothing the face ever
+ * shows, and is the exact geometry that reads as "an eye through the back of the
+ * head" the instant anything (a socket that is too shallow, a mirrored draw, a
+ * head that is scaled narrower than the eye placement assumed) lets it out. An
+ * eye that has no rear hemisphere cannot show one. Front is +z in head-local.
+ */
+function keepFrontCap(m, zMin) {
+  const remap = new Int32Array(m.p.length / 3).fill(-1);
+  const np = [], nn = [], nuv = [], ni = [];
+  const keep = (v) => {
+    if (remap[v] === -1) {
+      remap[v] = np.length / 3;
+      np.push(m.p[v * 3], m.p[v * 3 + 1], m.p[v * 3 + 2]);
+      if (m.n.length) nn.push(m.n[v * 3] || 0, m.n[v * 3 + 1] || 0, m.n[v * 3 + 2] || 0);
+      if (m.uv.length) nuv.push(m.uv[v * 2] || 0, m.uv[v * 2 + 1] || 0);
+    }
+    return remap[v];
+  };
+  for (let t = 0; t < m.i.length; t += 3) {
+    const a = m.i[t], b = m.i[t + 1], c = m.i[t + 2];
+    if (Math.max(m.p[a * 3 + 2], m.p[b * 3 + 2], m.p[c * 3 + 2]) < zMin) continue;
+    ni.push(keep(a), keep(b), keep(c));
+  }
+  m.p = np; m.n = nn; m.uv = nuv; m.i = ni;
+  return m;
+}
+
 export function eyeball(base, side) {
   const m = ellipsoid(EYE_R, EYE_R, EYE_R, { seg: 14, rows: 9 });
+  // Only the forward cap — the socket buries everything past the equator, and
+  // the visible eye reaches no further round than ~30 deg off dead-ahead, so a
+  // cap kept a little past the equator is identical from every angle a viewer
+  // can occupy while carrying no rear hemisphere to leak out of the skull.
+  keepFrontCap(m, -EYE_R * 0.2);
   computeNormals(m);
   const zc = headSurfaceZ(side * EYE_X, EYE_Y) - EYE_R + 0.0030;
   place(m, base[0] + side * EYE_X, base[1] + EYE_Y, base[2] + zc);

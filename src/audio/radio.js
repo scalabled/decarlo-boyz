@@ -48,7 +48,7 @@ const STEPS_PER_BAR = 16;
 export const STATIONS = {
   grease: {
     id: 'grease', name: 'GREASE FM', tag: 'garage rock',
-    scale: [0, 3, 5, 6, 7, 10], bpm: 118, wave: 'sawtooth', root: 45,
+    scale: [0, 3, 5, 6, 7, 10], bpm: 110, wave: 'sawtooth', root: 45,
     swing: 0.07, level: 0.79, tone: { hp: 70, lp: 12000, tilt: 2, drive: 1.6, noise: 0.0015 },
     // Degrees (in semitones from the root) a bar can sit on, and how often the
     // progression turns. A blues turnaround with a flat-seven lift.
@@ -57,35 +57,35 @@ export const STATIONS = {
   },
   gold: {
     id: 'gold', name: 'BLACK & GOLD', tag: 'soul',
-    scale: [0, 2, 4, 7, 9], bpm: 92, wave: 'triangle', root: 48,
+    scale: [0, 2, 4, 7, 9], bpm: 88, wave: 'triangle', root: 48,
     swing: 0.19, level: 1.10, tone: { hp: 55, lp: 13500, tilt: 1, drive: 1.0, noise: 0.0008 },
     progs: [[0, 9, 5, 7], [0, 5, 9, 7], [9, 5, 0, 7], [0, 0, 5, 5, 9, 9, 7, 7]],
     songBars: 32, chordKind: 'seventh',
   },
   redline: {
     id: 'redline', name: 'REDLINE', tag: 'drum machine',
-    scale: [0, 2, 3, 5, 7, 10], bpm: 146, wave: 'square', root: 43,
+    scale: [0, 2, 3, 5, 7, 10], bpm: 116, wave: 'square', root: 43,
     swing: 0.0, level: 1.11, tone: { hp: 40, lp: 15000, tilt: 0, drive: 1.3, noise: 0.0006 },
     progs: [[0, 0, 10, 10], [0, 0, 5, 3], [0, 10, 8, 10], [0, 0, 0, 0, 5, 5, 10, 10]],
     songBars: 48, chordKind: 'stab',
   },
   slack: {
     id: 'slack', name: 'SLACKWATER', tag: 'ambient',
-    scale: [0, 4, 7, 11, 14], bpm: 68, wave: 'sine', root: 52,
+    scale: [0, 4, 7, 11, 14], bpm: 66, wave: 'sine', root: 52,
     swing: 0.0, level: 1.13, tone: { hp: 32, lp: 11000, tilt: -2, drive: 0.8, noise: 0.0004 },
     progs: [[0, 0, 5, 5], [0, 0, 9, 9], [0, 5, 9, 4], [0, 0, 0, 0, 7, 7, 5, 5]],
     songBars: 24, chordKind: 'pad',
   },
   furnace: {
     id: 'furnace', name: 'FURNACE 101', tag: 'industrial',
-    scale: [0, 1, 5, 6, 8], bpm: 132, wave: 'sawtooth', root: 41,
+    scale: [0, 1, 5, 6, 8], bpm: 112, wave: 'sawtooth', root: 41,
     swing: 0.0, level: 0.97, tone: { hp: 45, lp: 14000, tilt: 1, drive: 2.4, noise: 0.0022 },
     progs: [[0, 0, 1, 0], [0, 0, 6, 5], [0, 1, 0, 8], [0, 0, 0, 0, 1, 1, 6, 6]],
     songBars: 32, chordKind: 'cluster',
   },
   incline: {
     id: 'incline', name: 'INCLINE AM', tag: 'old country',
-    scale: [0, 2, 4, 5, 7, 9], bpm: 84, wave: 'triangle', root: 50,
+    scale: [0, 2, 4, 5, 7, 9], bpm: 80, wave: 'triangle', root: 50,
     swing: 0.14, level: 2.90, tone: { hp: 260, lp: 3400, tilt: 0, drive: 1.1, noise: 0.006 },
     progs: [[0, 0, 5, 7], [0, 5, 0, 7], [0, 0, 7, 7, 5, 5, 0, 7], [0, 9, 5, 7]],
     songBars: 32, chordKind: 'open',

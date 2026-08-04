@@ -145,6 +145,13 @@ export class Animator {
      * hands, the hunch, the chin tuck, the blade and the shrug — in one place.
      */
     this.debugGuardPose = true;
+    /**
+     * NEGATIVE CONTROL for `src/player/anim/aimposeprobe.mjs`: false reverts the
+     * weapon-hold elbow pole from the chest frame back to the root/face frame,
+     * the bug where the support forearm crossed through the torso at high aim
+     * twist. Default true (fixed).
+     */
+    this.debugAimChestPole = true;
     this.swimPhase = 0;
     this.deadSm = 0;
     this.turnSm = 0;
@@ -180,6 +187,8 @@ export class Animator {
     this._right = new THREE.Vector3();
     this._up = new THREE.Vector3(0, 1, 0);
     this._pole = new THREE.Vector3();
+    this._chestRight = new THREE.Vector3();
+    this._chestFwd = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     this._rest = {};
     this._len = {};
@@ -782,6 +791,27 @@ export class Animator {
     b.chest.updateWorldMatrix(true, false);
 
     const shoulder = this.rig.side; // +1 right shoulder, -1 left
+
+    // The elbow pole vectors must be expressed in the CHEST frame, not the
+    // root/face frame. The grip targets below are in chest-local space, so when
+    // the aim twists the chest away from the pelvis (aiming across the body) a
+    // pole built from `this._right`/`this._fwd` no longer means "down and out
+    // from the shoulder" — it points somewhere unrelated to the actual shoulder
+    // line, the two-bone solver plants the elbow on the wrong side, and the
+    // reaching forearm is driven THROUGH the chest. Reading the pole off the
+    // chest's own basis keeps the elbow down-and-out at every twist angle.
+    // NEGATIVE CONTROL, read by `src/player/anim/aimposeprobe.mjs` and nothing
+    // else: false restores the old root/face-frame pole, which drives the
+    // reaching forearm through the chest at high aim twist.
+    if (this.debugAimChestPole === false) {
+      this._chestRight.copy(this._right);
+      this._chestFwd.copy(this._fwd);
+    } else {
+      const ce = b.chest.matrixWorld.elements;
+      this._chestRight.set(ce[0], ce[1], ce[2]).normalize();
+      this._chestFwd.set(-ce[8], -ce[9], -ce[10]).normalize();
+    }
+
     // Grip in chest-local metres: forward is -Z in bind space.
     this._v.set(0.12 * shoulder * scale, 0.14 * scale, -0.34 * scale);
     // pitch the grip with the aim so the weapon tracks vertically
@@ -805,9 +835,9 @@ export class Animator {
 
       // Blend from the FK swing pose to the IK pose.
       this._q.copy(arm.quaternion);
-      this._pole.copy(this._right).multiplyScalar(side * 0.75);
+      this._pole.copy(this._chestRight).multiplyScalar(side * 0.75);
       this._pole.y -= 0.9;
-      this._pole.addScaledVector(this._fwd, -0.25);
+      this._pole.addScaledVector(this._chestFwd, -0.25);
       this._pole.normalize();
 
       solveTwoBone(

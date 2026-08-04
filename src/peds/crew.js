@@ -195,20 +195,33 @@ function lin(hex, gain = 1) {
  * lands around 0.30, the darkest never reaches zero because the weave scatters,
  * and the hue is a little desaturated by the yarn itself.
  *
- * `peak` is the reflectance the brightest channel is normalised to, `desat` how
- * far the colour is pulled toward its own luminance. The HUE — which is how the
- * player tells Carson from Dylan at fifty metres — is preserved exactly.
+ * `lumTarget` is the LUMINANCE the finished cloth sits at; `desat` how far the
+ * colour is pulled toward its own luminance. The HUE — which is how the player
+ * tells Carson from Dylan at fifty metres — is preserved exactly.
+ *
+ * NORMALISE TO LUMINANCE, NOT TO THE PEAK CHANNEL. The first version pinned the
+ * BRIGHTEST CHANNEL to a target, which is a trap for saturated hues: only one
+ * channel is near the peak and the rest are tiny, so the actual brightness lands
+ * far below it — and the more the hue leans on a low-luminance channel the worse
+ * it gets, because luminance weights green 0.72 and BLUE ONLY 0.07. Measured on
+ * the three brothers under the old peak rule: Carson's teal shirt came out at
+ * 0.111 luminance, Aidan's orange at 0.053 (as dark as wet asphalt) and Dylan's
+ * blue-violet at 0.025 — HALF the reflectance of the pavement, i.e. his one
+ * identifying colour rendered as a black hoodie. That is the "muddy clothing /
+ * colours look off" defect, and it hit the most saturated brother hardest.
+ * Normalising to luminance lands all three at a believable, comparable dyed
+ * brightness while the hue still tells them apart. A physical ceiling keeps a
+ * pale hue from blowing out — no dyed garment reflects past ~0.55 on a channel.
  */
-function cloth(hex, peak = 0.30, desat = 0.16) {
+function cloth(hex, lumTarget = 0.16, desat = 0.16) {
   const c = lin(hex);
   const y = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
   const out = new Array(3);
-  let max = 1e-6;
-  for (let i = 0; i < 3; i++) {
-    out[i] = c[i] * (1 - desat) + y * desat;
-    if (out[i] > max) max = out[i];
-  }
-  const k = peak / max;
+  for (let i = 0; i < 3; i++) out[i] = c[i] * (1 - desat) + y * desat;
+  const yOut = out[0] * 0.2126 + out[1] * 0.7152 + out[2] * 0.0722;
+  let k = lumTarget / Math.max(1e-6, yOut);
+  const max = Math.max(out[0], out[1], out[2]);
+  if (max * k > 0.55) k = 0.55 / max; // physical ceiling on the brightest channel
   for (let i = 0; i < 3; i++) out[i] = Math.max(0.014, out[i] * k);
   return out;
 }
@@ -223,22 +236,22 @@ export const BROTHERS = {
   carson: {
     id: 'carson', name: 'Carson', shape: 'puffaM', height: 1.855, bulk: 1.06,
     colour: '#2ea6a0', accent: '#7bf0d8', run: 6.4,
-    skin: lin('#f0cdae', 0.42), hair: lin('#3b2a1c'), shirt: cloth('#1f6f6a', 0.135),
-    pants: lin('#26303c'), accentRgb: cloth('#7bf0d8', 0.20, 0.30), hat: lin('#26303c', 1.4),
+    skin: lin('#f0cdae', 0.42), hair: lin('#3b2a1c'), shirt: cloth('#1f6f6a', 0.150),
+    pants: lin('#26303c'), accentRgb: cloth('#7bf0d8', 0.220, 0.30), hat: lin('#26303c', 1.4),
     hp: 158, gait: { strideK: 0.94, armSwing: 0.62, bounce: 0.72, sway: 0.62, lean: 1.2, stoop: 1.6 },
   },
   aidan: {
     id: 'aidan', name: 'Aidan', shape: 'jacketM', height: 1.795, bulk: 1.0,
     colour: '#ff6a12', accent: '#ffc93c', run: 6.9,
-    skin: lin('#f4d4b6', 0.42), hair: lin('#8a5a2a', 0.85), shirt: cloth('#c2410c', 0.165),
-    pants: lin('#1f2733'), accentRgb: cloth('#ffc93c', 0.22, 0.26), hat: lin('#1f2733', 1.4),
+    skin: lin('#f4d4b6', 0.42), hair: lin('#8a5a2a', 0.85), shirt: cloth('#c2410c', 0.150),
+    pants: lin('#1f2733'), accentRgb: cloth('#ffc93c', 0.230, 0.26), hat: lin('#1f2733', 1.4),
     hp: 140, gait: { strideK: 1.02, armSwing: 0.95, bounce: 0.9, sway: 0.8, lean: 2.0, stoop: 0.4 },
   },
   dylan: {
     id: 'dylan', name: 'Dylan', shape: 'hoodieM', height: 1.735, bulk: 0.95,
     colour: '#c07cff', accent: '#5fd0ff', run: 7.9,
-    skin: lin('#eec9a8', 0.42), hair: lin('#221812'), shirt: cloth('#7c3aed', 0.115, 0.26),
-    pants: lin('#1a1f2b'), accentRgb: cloth('#5fd0ff', 0.20, 0.30), hat: lin('#1a1f2b', 1.4),
+    skin: lin('#eec9a8', 0.42), hair: lin('#221812'), shirt: cloth('#7c3aed', 0.140, 0.26),
+    pants: lin('#1a1f2b'), accentRgb: cloth('#5fd0ff', 0.210, 0.30), hat: lin('#1a1f2b', 1.4),
     hp: 124, gait: { strideK: 1.12, armSwing: 1.25, bounce: 1.12, sway: 0.95, lean: 3.0, stoop: -0.8 },
   },
 };

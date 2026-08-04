@@ -352,6 +352,9 @@ export class ProjectileSim {
     /* Cars are not in `physics`. See vehiclehit.js — without this every round
      * in the game passed through every vehicle in Steel City. */
     this.cars = new VehicleHitTest(ctx);
+    /* NEGATIVE CONTROL for tracerprobe.mjs — see `_emitTracer`. Never set in
+     * gameplay. */
+    this.debugTracerNoCars = false;
     this.stats = { fired: 0, impacts: 0, live: 0, detonations: 0, carHits: 0, carDamage: 0 };
   }
 
@@ -429,6 +432,23 @@ export class ProjectileSim {
    * Anything slow enough to watch has a mesh instead, and drawing an instant
    * streak to the impact point of a 38 m/s nitrous bottle would arrive two and
    * a half seconds before the bottle does.
+   *
+   * THE STREAK HAS TO END WHERE THE ROUND ENDS, NOT WHERE THE MUZZLE RAY DOES.
+   * The visible line is drawn muzzle -> `to`, and the muzzle sits a metre below
+   * and left of the optic (see defs.js), so a line that runs parallel to the
+   * camera reads at a visibly wrong angle — "the bullets go somewhere other than
+   * the crosshair". The cure is to terminate the streak on the point the shot
+   * actually strikes, so the drawn segment CONVERGES on the impact and reads as
+   * "going where I aimed". `p.dir` already points from the muzzle at the aim
+   * convergence point (see `WeaponSystem._fireOnce`), so the only thing left is
+   * to find the true first contact along it.
+   *
+   * That first contact is the SAME nearest-of(physics, vehicles) the round's own
+   * integration takes in `fixedUpdate`. VEHICLES ARE NOT IN THE PHYSICS RAY (see
+   * the note there), so a phys-only cast tunnels straight through a car and lands
+   * the streak on the wall behind it while the bullet stops at the bodywork —
+   * the exact parallel-to-camera divergence this exists to avoid. Cast both and
+   * keep whichever is nearer.
    */
   _emitTracer(p, speed) {
     if (p.visual && speed < 150) return;
@@ -438,6 +458,17 @@ export class ProjectileSim {
     if (phys) {
       const hit = phys.raycast(p.pos, p.dir, dist, phys.MASK?.BULLET);
       if (hit?.hit) dist = hit.distance;
+    }
+    /* Cars live outside `phys`; without this the streak overshoots every vehicle
+     * it is aimed at. Take the nearer of the wall and the bodywork.
+     * `debugTracerNoCars` is the NEGATIVE CONTROL for tracerprobe.mjs only — it
+     * restores the phys-only streak that tunnels through vehicles, and the gate
+     * asserts that reintroducing it drives the tracer END off the impact point.
+     * It leaves the round's OWN vehicle test (fixedUpdate) untouched, so the car
+     * still reports a real impact to measure the broken tracer against. */
+    if (!this.debugTracerNoCars) {
+      const car = this.cars.cast(p.pos, p.dir, dist);
+      if (car && car.distance < dist) dist = car.distance;
     }
     this._tracerTo.copy(p.pos).addScaledVector(p.dir, dist);
     this._tracerPayload.speed = speed;

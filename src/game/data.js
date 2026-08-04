@@ -302,7 +302,7 @@ export const BOYZ = {
     hp: 130, armorMax: 60, runSpeed: 6.4, vehGrip: 1.06, boatSpeed: 1.25,
     rival: 'THE HARBORMASTER',
     weapons: ['fists', 'pipe', 'flare', 'speargun', 'harpoon', 'depth'],
-    start: ['fists', 'pipe'],
+    start: ['fists', 'pipe', 'flare', 'speargun'],
     radio: ['slack', 'gold', 'furnace', 'incline'],
     car: 'truck',
     intro: {
@@ -389,7 +389,7 @@ export const BOYZ = {
     rival: 'DUKE MARROW',
     partner: { id: 'gabby', name: 'Gabby', color: '#ff9ecb' },
     weapons: ['fists', 'wrench', 'nailgun', 'sprayer', 'rivetgun', 'launcher'],
-    start: ['fists', 'wrench'],
+    start: ['fists', 'wrench', 'nailgun', 'rivetgun'],
     radio: ['grease', 'gold', 'redline', 'furnace'],
     car: 'muscle',
     intro: {
@@ -479,7 +479,7 @@ export const BOYZ = {
     hp: 100, armorMax: 55, runSpeed: 7.9, vehGrip: 1.22, boatSpeed: 1.05,
     rival: 'VIPER LANE',
     weapons: ['fists', 'crowbar', 'tackgun', 'emp', 'smg', 'rocket'],
-    start: ['fists', 'crowbar'],
+    start: ['fists', 'crowbar', 'tackgun', 'smg'],
     radio: ['redline', 'furnace', 'grease', 'slack'],
     // Dylan's own car, named specifically. A front-drive fastback: the only
     // class in the fleet with its mass over the driven axle (comZ 0.60 against

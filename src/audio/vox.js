@@ -121,7 +121,15 @@ export const BARKS = {
 
 const WAVE_CACHE = new WeakMap();
 
-/** Glottal-ish pulse: strong fundamental, 1/n^1.15 rolloff, alternating phase. */
+/**
+ * Glottal-ish pulse. A 1/n^1.15 rolloff kept a lot of energy on the high
+ * harmonics, and a hard periodic source that bright is exactly the buzzy,
+ * "Speak&Spell" edge that reads as alien. A real glottal flow falls off
+ * steeper, so 1/n^1.55 warms the source toward a human chest voice — but not so
+ * steep it goes muffled: enough upper harmonics survive for the formants to
+ * colour and for a shout to still cut. The even harmonics are also pulled down
+ * (a rounder pulse, less reedy).
+ */
 function glottalWave(actx) {
   let w = WAVE_CACHE.get(actx);
   if (w) return w;
@@ -129,7 +137,7 @@ function glottalWave(actx) {
   const real = new Float32Array(N);
   const imag = new Float32Array(N);
   for (let n = 1; n < N; n++) {
-    imag[n] = (1 / Math.pow(n, 1.15)) * (n % 2 === 0 ? -0.75 : 1);
+    imag[n] = (1 / Math.pow(n, 1.55)) * (n % 2 === 0 ? -0.6 : 1);
   }
   w = actx.createPeriodicWave(real, imag, { disableNormalization: false });
   WAVE_CACHE.set(actx, w);
@@ -158,6 +166,27 @@ export function bark(actx, bank, rng, o = {}) {
   const srcGain = gain(actx, 0);
   src.connect(srcGain);
 
+  // Humanise the pitch. A formant voice on a dead-steady fundamental is the
+  // single biggest "alien / robot" tell; a real larynx never holds a note
+  // perfectly. Two slow, incommensurate LFOs sum into the frequency param on
+  // TOP of the scheduled syllable contour: a ~5 Hz vibrato and a slower drift,
+  // together under ~2% so it warms rather than warbles. Skip on the death line,
+  // where the pitch is meant to collapse cleanly.
+  if (!spec.dying) {
+    const vibHz = rng.range(4.6, 5.8);
+    const vib = actx.createOscillator();
+    vib.type = 'sine'; vib.frequency.value = vibHz;
+    const vg = gain(actx, f0 * 0.010);
+    vib.connect(vg); vg.connect(src.frequency);
+    const drift = actx.createOscillator();
+    drift.type = 'sine'; drift.frequency.value = rng.range(0.7, 1.3);
+    const dg = gain(actx, f0 * 0.012);
+    drift.connect(dg); dg.connect(src.frequency);
+    const lfoEnd = t0 + total + 0.5;
+    vib.start(t0); vib.stop(lfoEnd);
+    drift.start(t0); drift.stop(lfoEnd);
+  }
+
   // Aspiration: always a little, a lot when hurt or dying.
   const breathLevel = (spec.breath ?? 0.16) * rng.range(0.8, 1.25);
   const noise = bank.source('white', rng, rng.range(0.9, 1.2));
@@ -183,11 +212,17 @@ export function bark(actx, bank, rng, o = {}) {
   }
 
   /* ---- vocal tract output shaping -------------------------------- */
-  const throat = biquad(actx, 'peaking', 480, 1.1, 4);      // chest resonance
-  const presence = biquad(actx, 'peaking', 2600, 1.4, 5);   // shout presence
-  const hp = biquad(actx, 'highpass', 150, 0.7);
-  const lp = biquad(actx, 'lowpass', 5200, 0.7);
-  const drv = shaper(actx, saturationCurve(1.6 * (spec.drive ?? 1), 0.35), '2x');
+  // The presence peak and the saturation are what separate "someone talking"
+  // from "a robot shouting". Both now scale with the bark's own drive: a calm
+  // squad line (drive ~0.9) gets a gentle 2.2 dB presence and light saturation
+  // so it reads as a person; a panicked enemy yell (drive ~1.5) keeps a bright,
+  // cutting 4.0 dB peak and more grit so it still punches through at 30 m.
+  const dr = spec.drive ?? 1;
+  const throat = biquad(actx, 'peaking', 470, 1.0, 4.2);          // chest warmth
+  const presence = biquad(actx, 'peaking', 2550, 1.2, clamp(dr * 3.0 - 0.5, 1.6, 5)); // presence
+  const hp = biquad(actx, 'highpass', 140, 0.7);
+  const lp = biquad(actx, 'lowpass', 5000, 0.7);
+  const drv = shaper(actx, saturationCurve(1.25 * dr, 0.32), '2x');
   const bodyGain = gain(actx, 1.5 * level);
   for (const f of fs) f.g.connect(throat);
   series(throat, presence, hp, lp, drv, bodyGain).connect(out);

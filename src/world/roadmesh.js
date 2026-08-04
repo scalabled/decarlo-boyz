@@ -237,6 +237,40 @@ function legacyPad() {
 }
 
 /**
+ * A/B hatch for the junction DRIVE-SURFACE coverage fix — the negative control
+ * for the hole assertion in `src/world/drivesweep.mjs`. `?nocapfix=1`, or
+ * `OW_NO_CAP_FIX=1` headless, reverts BOTH halves of that fix, which target the
+ * same defect (a wheel dropping into a junction pad):
+ *
+ *   1. the union cap. The old cap clipped the pad boundary at `1.7 * maxArmInset`
+ *      regardless of arm width, so a wide arm whose mouth corner
+ *      `sqrt(R^2 + hw^2)` sat outside `1.7 * maxR` had the pad neck in short of
+ *      it. The live cap follows the WIDEST arm's mouth corner, which the union
+ *      can never exceed.
+ *   2. the full collision mouth. A non-live (mitred) corner truncates each arm's
+ *      mouth to the bisector to keep the VISIBLE fan from folding; that also
+ *      orphaned a wedge of a wide-short arm's own carriageway in the COLLISION
+ *      shell, where overlap is harmless. The live path runs each collision mouth
+ *      to its full `atan2(hw, R)`. MEASURED with `drivesweep`: every surviving
+ *      hole sample was inside a junction pad, the bulk at 4+-arm nodes.
+ */
+let _legacyCap = null;
+function legacyCap() {
+  if (_legacyCap !== null) return _legacyCap;
+  _legacyCap = false;
+  try {
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('nocapfix') === '1') {
+      _legacyCap = true;
+    }
+  } catch { /* no location */ }
+  try {
+    if (typeof process !== 'undefined' && process?.env?.OW_NO_CAP_FIX === '1') _legacyCap = true;
+  } catch { /* no process */ }
+  if (_legacyCap) console.warn('[world] JUNCTION PAD CAP FIX DISABLED — cap clips the union at 1.7x pad radius again');
+  return _legacyCap;
+}
+
+/**
  * A/B hatch for the hole fix, and the negative control for
  * `src/physics/walksweep.mjs`. `?nogapfix=1`, or `OW_NO_GAP_FIX=1` headless,
  * puts back the two things that dug the trench: the suppressed footway strip
@@ -1673,6 +1707,22 @@ class SectorBuild {
     let rmax = 0;
     for (let i = 0; i < na; i++) rmax = Math.max(rmax, arms[i].R);
     rmax *= PAD_RMAX;
+    // The `1.7 * maxR` cap is a turning-head radius, not a carriageway one, and
+    // on a node whose arms differ enormously in width it clips the union short.
+    // A ray leaving the node at the mouth of arm A reaches that arm's own kerb
+    // corner at `sqrt(R^2 + hw^2)` — the point where the straight run's edge
+    // ends — and if that sits outside `1.7 * maxR` the pad necks in before it,
+    // leaving a hole between pad and carriageway (drivesweep: 666 samples, all
+    // 4+-arm pads). So the cap must reach the WIDEST arm's mouth corner. Raising
+    // it can only let `r = min(rU, rc)` follow the true union `rU` more
+    // faithfully — by the triangle inequality `sqrt(R^2 + (hw+d)^2) <=
+    // sqrt(R^2 + hw^2) + d`, so the mouth is never clipped at any offset `d`,
+    // and nothing that was unclipped before becomes clipped.
+    if (!legacyCap()) {
+      for (let i = 0; i < na; i++) {
+        rmax = Math.max(rmax, Math.hypot(arms[i].R, arms[i].hw));
+      }
+    }
 
     for (let i = 0; i < na; i++) {
       const A = arms[i];
@@ -1697,8 +1747,21 @@ class SectorBuild {
 
     for (let i = 0; i < na; i++) {
       const A = arms[i];
-      const back = cors[(i - 1 + na) % na].hB;
-      const fwd = cors[i].hA;
+      // A mouth is a STRAIGHT line — the arm's end cross-section at arc R — so it
+      // covers the arm's carriageway all the way out to ±atan2(hw, R). The mitre
+      // truncates that on a non-live corner (`hA/hB = phi/2`) to stop the VISIBLE
+      // fan folding where two mouths overlap. But the COLLISION pad does not care
+      // about a fold: a downward ray finds the top surface, so two overlapping
+      // mouths are harmless double coverage. Truncating the mouth there, on the
+      // other hand, orphans a wedge of real carriageway a car drives on — most
+      // visibly a wide arm on a short inset, whose 60-degree mouth is cut to
+      // ~24 degrees by a narrow neighbour 48 degrees away (drivesweep node 16).
+      // So in the collision pass each mouth runs to its OWN full half-angle; the
+      // visible pass keeps the mitre. This never reintroduces the fold anyone can
+      // see, because it only widens the invisible collision shell.
+      const fullMouth = this.colOnly && !legacyCap();
+      const back = fullMouth ? A.half : cors[(i - 1 + na) % na].hB;
+      const fwd = fullMouth ? A.half : cors[i].hA;
       // --- A's mouth: constant arc R, so the camber is the only shape in it.
       const M = 2;
       for (let k = 0; k <= M; k++) {
