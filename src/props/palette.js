@@ -138,9 +138,14 @@ export const SURFACES = {
     },
   },
   bag: {
+    // 0x1b1c1e (RGB 27,28,30) at 0.85 roughness caught almost no light, so a
+    // refuse sack in any shadow read as a black VOID — a hole in the pavement,
+    // not an object. A real bin bag is a dark charcoal that still takes a sheen
+    // of skylight on its top folds. Lifted the tint to 0x33353a and dropped the
+    // base roughness so the crown catches enough light to show the lumpy form.
     name: 'rubber', opts: {
-      scale: 0.4, tint: 0x1b1c1e, vertexMasks: true, ...wear(0.35, 0.7, 0.6),
-      roughness: [0.85, 0.02, 0.18],
+      scale: 0.4, tint: 0x33353a, vertexMasks: true, ...wear(0.35, 0.7, 0.6),
+      roughness: [0.72, 0.04, 0.2],
     },
   },
   tyre: {
