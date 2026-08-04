@@ -72,7 +72,7 @@ export const TUNE = {
   /**
    * Cross-track error (m) past which the driver recovers the lane before
    * recovering speed, and the floor that cap never goes under. See
-   * `_longitudinal` — cap = max(floor, 10.5 - 1.5 * (err - recoverLat)).
+   * `_longitudinal` — cap = max(floor, 9.0 - 1.8 * (err - recoverLat)).
    * `recoverBrake` bounds how far below the CURRENT speed the cap may pull
    * the target in one tick's demand — the glide that keeps the front tyres
    * gripping while the car steers back to its lane.

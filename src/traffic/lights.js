@@ -120,10 +120,21 @@ export class SignalNet {
       else rankB = Math.max(rankB, r);
     }
 
-    // Split green time by class: the arterial gets the long phase.
+    /**
+     * Split green time by class: the arterial gets the long phase — but the
+     * short phase is FLOORED AT 9 s (swing capped at 6, was 9). At the old
+     * cap a street crossing a highway got a 6 s green against a 39 s red,
+     * which is a starvation plan: a queue of three cannot clear 6 s of green,
+     * so its tail misses the green entirely and stands through the next full
+     * red. MEASURED (downtown, 3 min, budget 38): continuous stops of 46-62 s
+     * at exactly such approaches — a car 19 s behind a slow head during its
+     * own green, then `timeToGreen` 35 as the amber lands. The cycle length
+     * is unchanged (the swing is symmetric), so the green wave's offsets are
+     * untouched.
+     */
     const spread = rankA - rankB;
-    const gA = 19 + Math.max(-6, Math.min(9, spread * 5));
-    const gB = 15 - Math.max(-6, Math.min(9, spread * 5));
+    const gA = 19 + Math.max(-6, Math.min(6, spread * 5));
+    const gB = 15 - Math.max(-6, Math.min(6, spread * 5));
     const cycle = gA + AMBER + PED + gB + AMBER + PED;
 
     // Green wave: nodes on a corridor are offset by their projection onto the

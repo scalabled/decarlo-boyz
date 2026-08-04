@@ -276,7 +276,10 @@ export class DamageModel {
   buckleBonnet() {
     const v = this.v;
     const s = v.spec.style;
-    if (!s.cowlZ) return;
+    // A bonnet needs a cowl AND front arches to buckle between. The tank has
+    // a cowl height for its seat anchor but no arches at all — its wheels
+    // live behind skirts — and a wreck must not crash on the lookup.
+    if (!s.cowlZ || !s.archF) return;
     const z0 = s.cowlZ;
     const z1 = s.archF.z + s.archF.r * 0.6;
     const amp = this.bonnetPop * 0.26;

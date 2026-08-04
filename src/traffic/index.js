@@ -97,9 +97,16 @@ export class TrafficSystem {
      *                      dead-end U-turn crawl in Driver._pathSpeed
      *   debugNoLaneAdopt   disables lane re-adoption in Driver._syncPath
      *   lanes.debugNoTrapGuard  disables trap refusal in LaneNet.successor
+     *   debugNoWedgeResolver    disables the queue-head resolver in
+     *                      Driver._health — the leader-stall excuse check and
+     *                      the strike escalation that recycles a car wedged
+     *                      through two full stall windows. With it on, the
+     *                      round-1 wedge (a welded pair at a junction head
+     *                      excusing each other forever) comes back.
      */
     this.debugNoRecoverCap = false;
     this.debugNoLaneAdopt = false;
+    this.debugNoWedgeResolver = false;
     /**
      * Can a car in this build actually be made to go backwards? The first
      * driver that needs to reverse out of something finds out for everybody —

@@ -125,6 +125,7 @@ export class Driver {
     this._recoverCool = 0;
     this._recoverX = 0;
     this._recoverZ = 0;
+    this._stallStrikes = 0;
     this.indicate = 0;
     this._indicatePhase = 0;
 
@@ -194,6 +195,7 @@ export class Driver {
     this._reroute = 0;
     this._recoverTimer = 0;
     this._recoverCool = 0;
+    this._stallStrikes = 0;
     this._claimNode = -1;
     this.indicate = 0;
     this._indicatePhase = rng.float() * 6.28;
@@ -942,10 +944,22 @@ export class Driver {
       const h = phys.raycast(ox, y, oz, dx, 0, dz, reach, phys.MASK.WORLD);
       // Only roughly vertical faces count; a rising road or a ramp is not a wall.
       if (h.hit && Math.abs(h.normal.y) < 0.65) {
-        // ...and confirm the thing we hit is actually ON the path. A wall
-        // beside the road is scenery; a wall across it is a problem.
+        /**
+         * ...and confirm the thing we hit is actually ON the path. A wall
+         * beside the road is scenery; a wall across it is a problem.
+         *
+         * BUT only screen it out while the CAR is near its path. When the car
+         * is off-lane, everything in front of its bumper is "beside the path"
+         * too, so this filter was discarding the very obstacle the ray had
+         * just seen — MEASURED: 13 of 35 big impacts in a 3-min downtown run
+         * carried the off-lane tag, cars driving into props and kerb faces at
+         * the recovery cap's 5-9 m/s with their own probe reporting the hit.
+         * An off-lane car's rays aim from its bumper back toward the lane, so
+         * anything they strike is on the ground it is about to cover: trust
+         * them.
+         */
         this._pathQuery(h.point.x, h.point.z, this._q);
-        if (this._q.lat > v.spec.half.x + 1.0) continue;
+        if (this._q.lat > v.spec.half.x + 1.0 && Math.abs(this._lat) < 2.0) continue;
         const d = Math.max(0.15, h.distance - hl);
         if (d < best) best = d;
       }
@@ -1151,7 +1165,15 @@ export class Driver {
      */
     const latE = Math.abs(this._lat) - Math.abs(this._swerve);
     if (latE > TUNE.recoverLat && !this.sys.debugNoRecoverCap) {
-      const cap = Math.max(TUNE.recoverFloor, 10.5 - 1.5 * (latE - TUNE.recoverLat));
+      /**
+       * 9.0 / 1.8 (was 10.5 / 1.5): MEASURED at the old numbers, off-lane
+       * cars were striking props and kerb faces at 5-9 m/s — 13 of 35 big
+       * impacts in 3 min carried the off-lane tag. The tighter ramp keeps a
+       * car 3 m off its lane under 6.1 m/s, which both shrinks the impulse
+       * when a strike does land and gives the forward probe's braking a
+       * chance to win first.
+       */
+      const cap = Math.max(TUNE.recoverFloor, 9.0 - 1.8 * (latE - TUNE.recoverLat));
       /**
        * GLIDE down to the cap, never slam. Setting v0 far below the current
        * speed makes the IDM free term command full brake, locked wheels have
@@ -1354,7 +1376,14 @@ export class Driver {
      * re-enables itself with no change here.
      */
     if (elapsed > 0.55 && v.forwardSpeed > -0.25) {
-      this.sys.reverseWorks = false;
+      /**
+       * Only convict the GEARBOX when the car had the traction to prove it.
+       * `grounded` is a wheel count: a car beached on a kerb with one wheel
+       * touching cannot move in any gear, and one such car concluding
+       * "reverse is unavailable in this build" disabled the manoeuvre for the
+       * whole fleet for the rest of the session.
+       */
+      if (v.grounded >= 3) this.sys.reverseWorks = false;
       return this._abortRecover(v);
     }
     if (this._recoverTimer <= 0 || back > RECOVER_DIST) {
@@ -1581,6 +1610,22 @@ export class Driver {
        * whole session and took the street's throughput with them.
        */
       const ld = this._lead.v ? this.sys.driverOf(this._lead.v) : null;
+      /**
+       * A LEADER IS ONLY AN EXCUSE WHILE THE LEADER ITSELF STILL MOVES.
+       *
+       * "My leader is near a stop line" used to excuse this car no matter what
+       * the leader was doing — and a WEDGED pair at a junction head satisfies
+       * it in both directions: each car is the other's leader, each is within
+       * 45 m of the junction's stop line, so each excused the other forever.
+       * MEASURED (round-1 tree, downtown, 3 min): head sedan at (-94, 164)
+       * with gap 0.1 m, exc:true, stopped 103.7 s and never moving again, 26
+       * cars queued >20 s behind it. `_stallStrikes` is monotone until REAL
+       * route progress, so a leader that has already struck once (a full
+       * stall window with zero progress) stops excusing its queue — which is
+       * what lets the strike escalation below reach the welded pair at all.
+       */
+      const ldOk = !!ld && ld._stopDist < 45 &&
+        (this.sys.debugNoWedgeResolver || ld._stallStrikes === 0);
       const excused =
         // A wall across the road is never an excuse to wait: re-route.
         (this._wall > 4 || this._lead.gap < 12) &&
@@ -1590,7 +1635,7 @@ export class Driver {
         // for the whole session.
         this._stopDist < 4.5 ||
         this.state === STATE.PULLOVER || this.state === STATE.BAIL ||
-        (this._lead.gap < 12 && (this._lead.speed > 0.5 || (ld && ld._stopDist < 45)));
+        (this._lead.gap < 12 && (this._lead.speed > 0.5 || ldOk));
       /**
        * Net displacement over the window, not accumulated path parameter:
        * a car that is stationary but jittering by a centimetre a tick
@@ -1604,16 +1649,49 @@ export class Driver {
        * nowhere; only the route odometer tells the two apart.
        */
       const odo = this._consumed + this._s;
-      const moving = odo - this._markOdo > 2.5;
+      /**
+       * 1.5 m, not 2.5: a queue discharging from a long red creeps a car
+       * length and a half per window at the tail, and scoring that as "no
+       * progress" is what let the strike escalation reach cars that were
+       * genuinely rolling. Still comfortably above projection jitter, which
+       * measures a few tens of centimetres.
+       */
+      const moving = odo - this._markOdo > 1.5;
       this._progTimer = 0;
       this._markOdo = odo;
       this._excused = excused && off < 2.4;
-      if (moving) this._stall = 0;
-      else this._stall++;
-      // Eight seconds of going nowhere with no excuse; forty with one — long
-      // enough to sit out the longest red in the signal table.
-      if (this._stall >= (this._excused ? 8 : 2)) {
+      if (moving) {
         this._stall = 0;
+        this._stallStrikes = 0;
+      } else this._stall++;
+      // Eight seconds of going nowhere with no excuse; thirty-two with one —
+      // long enough to sit out the longest red in the signal table. AFTER the
+      // first strike the excuse has already bought its 32 s and bought
+      // nothing: the window tightens to 12 s so a genuinely wedged car
+      // resolves inside the 45 s the gate allows.
+      if (this._stall >= (this._excused ? (this._stallStrikes > 0 ? 3 : 8) : 2)) {
+        this._stall = 0;
+        /**
+         * THE QUEUE-HEAD RESOLVER. A stall trigger used to end in `reseat()`,
+         * and `reseat()` re-snaps the PATH without moving the CAR — so a car
+         * that was physically wedged (welded to its partner at a junction
+         * head, beached on a kerb) reseated in place, had its counters reset,
+         * and started the same wait again, forever. `_reroute`'s 14 s memory
+         * always expired before the next excused trigger 32 s later, so the
+         * recycle arm was unreachable. MEASURED (round-1 tree, 3 min): the
+         * loop held one junction shut for 103.7 s with 26 cars behind it; the
+         * pre-fix build's worst was 40.7 s.
+         *
+         * A strike is a full stall window with zero route progress. Strikes
+         * survive `reseat()` — only real progress clears them — so the second
+         * one means the reseat did not work and the situation is physical:
+         * resolve it FOR REAL by removing the car. One car per pair breaks
+         * the weld; the survivor gets its gap back and drives on.
+         */
+        if (!this.sys.debugNoWedgeResolver && ++this._stallStrikes >= 2) {
+          this.sys.recycle(this, 'wedged');
+          return;
+        }
         // Wedged, and there is space behind: back out and try again. This is
         // the difference between a car that recovers where the player can see
         // it and a car that pops out of existence.

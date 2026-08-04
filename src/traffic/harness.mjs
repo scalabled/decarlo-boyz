@@ -24,8 +24,14 @@
  *   node src/traffic/harness.mjs --isolate              (silence police)
  *   node src/traffic/harness.mjs --control              (NEGATIVE CONTROL:
  *       run the live build with the derby fixes' debug hatches flipped —
- *       trap refusal, recovery cap, lane adoption all off. The carriageway,
- *       lane-keeping and collision-rate checks must go red under it.)
+ *       trap refusal, recovery cap, lane adoption and the queue-head wedge
+ *       resolver all off. The carriageway, lane-keeping and collision-rate
+ *       checks must go red under it.)
+ *   node src/traffic/harness.mjs --noresolver           (NEGATIVE CONTROL for
+ *       the wedge resolver alone: flips only debugNoWedgeResolver, so the
+ *       round-1 welded-pair deadlock class comes back while every other fix
+ *       stays live. "nobody stopped forever" must go red under it on a tree
+ *       where the wedge manifests.)
  *
  * The engine is booted with `?capture=1&lockstep=1`, so it never schedules a
  * frame of its own and `engine.step()` advances exactly 1/60 s. That makes the
@@ -188,8 +194,14 @@ try {
       const t = window.__ENGINE__.ctx.peek('traffic');
       t.debugNoRecoverCap = true;
       t.debugNoLaneAdopt = true;
+      t.debugNoWedgeResolver = true;
       t.lanes.debugNoTrapGuard = true;
       if (t.lanes._trap) t.lanes._trap.fill(0);
+    });
+  }
+  if (args.noresolver) {
+    await page.evaluate(() => {
+      window.__ENGINE__.ctx.peek('traffic').debugNoWedgeResolver = true;
     });
   }
   /**
@@ -264,51 +276,93 @@ check(
       `${JSON.stringify(R.intersect.drivenPair)} kinds=${JSON.stringify(R.intersect.pairKinds)}`
 );
 /**
- * RATCHET at 2.6 — the goal is the original 1.5. MEASURED before the derby
+ * RATCHET at 2.2 — the goal is the original 1.5. MEASURED before the derby
  * fixes (trap refusal, recovery speed cap, lane adoption; downtown, budget
- * 38): 3.59% at 2 min, 5.11% under `--control` at 3 min. After: 2.24%
- * downtown / 1.59% southside at 2 min. What remains is cars tucking back in
- * at the recovery cap's crawl after junction corner-cuts, concentrated on
- * the landmark-ring stub geometry. LOWER this when you improve it; never
- * raise it to make a run green (ARCHITECTURE.md rule 13).
+ * 38): 3.59% at 2 min, 5.11% under `--control` at 3 min. After round 1:
+ * 2.24% downtown at 2 min. After round 2 (probe scenery-filter fix, tighter
+ * recovery cap, spawn wall probe): 1.46-1.62% downtown at 3 min vs 2.72%
+ * under `--control`, so the ratchet comes DOWN from 2.6. LOWER this when you
+ * improve it; never raise it to make a run green (ARCHITECTURE.md rule 13).
  */
 check(
-  R.offroad.pct < 2.6,
-  'cars stay on the carriageway (RATCHET 2.6, goal 1.5)',
+  R.offroad.pct < 2.2,
+  'cars stay on the carriageway (RATCHET 2.2, goal 1.5)',
   `${R.offroad.pct.toFixed(2)}% of samples with a wheel past the kerb, worst ${R.offroad.max.toFixed(2)} m over` +
     (R.offroad.worst ? ` [${JSON.stringify(R.offroad.worst)}]` : '')
 );
 /**
- * RATCHET at 5.5 — records where the derby fixes got to, NOT where the bar
- * is; the goal remains p95 < 0.85 (a car inside its own lane). MEASURED
- * downtown, budget 38: p95 was 6.02-6.38 before the trap-refusal /
- * recovery-cap / lane-adoption fixes, 4.59-4.98 after (southside 2.62). What
- * is left in the number: cars recovering from junction corner-cuts at the
- * recovery cap's pace, and streets around landmark rings whose stub geometry
- * still forces wide lines. LOWER this when you improve it; never raise it to
- * make a run green (ARCHITECTURE.md rule 13).
+ * LANE KEEPING IS NOW MEASURED AGAINST THE EMITTED LANE GEOMETRY (rule 12):
+ * the DRAWN car's distance to the nearest usable lane centre of the road
+ * graph, travel direction taken from the drawn heading — see `laneErrOf` in
+ * the probe. The old metric read `d.diag.lat`, the controller's own
+ * cross-track belief, and the round-1 lane-adoption fix REWRITES that belief
+ * mid-block — a gate reading it back was comparing the controller to itself
+ * (the eighth instance of the rule-12 disease, caught before it shipped a
+ * number: belief p95 read 4.6-6.2 while the emitted error's p95 was 7.8).
+ *
+ * THREE clauses, because the fixed and control arms separate differently on
+ * the emitted quantity — MEASURED downtown, 3 min, budget 38, round-2 fixes:
+ *
+ *              p95      max     cars ever >10 m off
+ *   fixed      5.05    16.35     4/27
+ *   --control  6.12    41.43    16/27
+ *
+ * The control arm's p95 is BARELY worse than the fixed arm's, because a
+ * reckless fleet crosses its off-lane distance quickly (few samples, huge
+ * errors) while a careful one crawls back at the recovery cap (many samples,
+ * bounded errors) — p95 integrates exposure, so it must never be this
+ * check's only clause. `max` and the >10 m car count are what the fixes
+ * actually buy: nobody tens of metres from any lane.
+ *
+ * p95 RATCHET 6.0 (goal 0.85, a car inside its own lane); max 25; bad cars
+ * a third of the fleet. LOWER the ratchet when you improve it; never raise
+ * it to make a run green (ARCHITECTURE.md rule 13).
  */
 check(
-  R.laneKeep.p95 < 5.5,
-  'lane keeping (RATCHET 5.5, goal 0.85)',
-  `mean |lat| ${R.laneKeep.mean.toFixed(2)} m, p95 ${R.laneKeep.p95.toFixed(2)} m, max ${R.laneKeep.max.toFixed(2)} m\n        ` +
+  R.laneKeep.p95 < 6.0 && R.laneKeep.max < 25 &&
+    R.laneKeep.badCars <= R.laneKeep.totalCars / 3,
+  'lane keeping vs EMITTED lanes (RATCHET p95 6.0, goal 0.85)',
+  `mean |lat| ${R.laneKeep.mean.toFixed(2)} m, p95 ${R.laneKeep.p95.toFixed(2)} m, max ${R.laneKeep.max.toFixed(2)} m (cap 25)\n        ` +
     `p50 ${R.laneKeep.p50.toFixed(2)} p75 ${R.laneKeep.p75.toFixed(2)} p90 ${R.laneKeep.p90.toFixed(2)} p99 ${R.laneKeep.p99.toFixed(2)}; ` +
-    `${R.laneKeep.badCars}/${R.laneKeep.totalCars} cars ever >10 m off\n        ` + JSON.stringify(R.laneKeep.worst)
+    `${R.laneKeep.badCars}/${R.laneKeep.totalCars} cars ever >10 m off (cap 1/3)\n        ` + JSON.stringify(R.laneKeep.worst)
 );
 /**
- * RATCHET at 0.75 — collision events (impulse > 2x mass) per driver-minute
- * across the whole fleet, the "crash-up derby" number. MEASURED downtown,
- * budget 38: 0.65 (2 min) to 0.883 (3 min, `--control`) before the fixes;
- * 0.496-0.651 after. The goal is well under 0.1. NOTE the separation from
- * the control arm is strongest at 3 minutes — the first two minutes are
- * dominated by the fill transient. Lower it when you improve it; never
- * raise it.
+ * RATCHET at 0.55 (was 0.75) — collision events (impulse > 2x mass) per
+ * driver-minute across the whole fleet, the "crash-up derby" number. The
+ * goal is well under 0.1. MEASURED downtown, budget 38, 3 min, this round:
+ * 0.348-0.472 across code rolls vs 0.697 under `--control`.
+ *
+ * TWO facts a future editor needs before touching this number:
+ *
+ * 1. WHAT IS IN IT. Bucketing (see `hitBuckets`) showed the round-1 number
+ *    was 33/35 car-vs-WORLD, not car-vs-car. Round 2 cut the driver-caused
+ *    share: the forward probe's scenery filter no longer discards obstacles
+ *    in front of an OFF-LANE car (13/35 hits carried the off-lane tag), the
+ *    recovery cap is tighter (9.0/1.8), and spawns cast a wall ray before
+ *    materialising (5/35 were sub-5 s-old cars aimed at bridge abutments).
+ *    Car-vs-car is now ~1 rear-end per 80 driver-minutes. The residual is
+ *    world-geometry conflict: road-collider TILE SEAMS firing near-vertical
+ *    impulses (normal.y ~1) under in-lane cars at legal speed on a junction
+ *    approach, and `props` street furniture standing inside the swept corner
+ *    corridor — neither is steerable from traffic; both are named per-site
+ *    in `hitCtx`. The number stays TOTAL anyway, so a regression in either
+ *    subsystem is still caught here rather than nowhere.
+ *
+ * 2. RESHUFFLE SENSITIVITY. Runs are deterministic, but ANY behavioural
+ *    change reshuffles the whole 3-minute roll: one unchanged mechanism set
+ *    measured 0.348 and 0.472 under two trivially different signal timings.
+ *    Do not read a +/-0.1 move as signal without replicates across sites.
+ *
+ * The separation from the control arm is strongest at 3 minutes — the first
+ * two are dominated by the fill transient. Lower it when you improve it;
+ * never raise it (ARCHITECTURE.md rule 13).
  */
 check(
-  R.hitsPerDriverMin < 0.75,
-  'collision rate (RATCHET 0.75)',
+  R.hitsPerDriverMin < 0.55,
+  'collision rate (RATCHET 0.55, goal 0.1)',
   `${R.bigHits} big impacts over ${R.driverMinutes.toFixed(1)} driver-minutes = ` +
-    `${R.hitsPerDriverMin.toFixed(3)}/driver-min`
+    `${R.hitsPerDriverMin.toFixed(3)}/driver-min\n        by kind: ` +
+    Object.entries(R.hitBuckets).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join('  ')
 );
 check(
   R.stuck.worst < 45,
@@ -382,7 +436,12 @@ console.log('');
 console.log('  reasons: ' + Object.entries(R.reasons).map(([k, v]) => `${k} ${v}`).join('  '));
 console.log('  stopped by: ' + Object.entries(R.stoppedBy).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join('  '));
 console.log(`  vehicle write-offs ${R.deaths}, big impacts ${R.bigHits}`);
+console.log('  impact buckets: ' + (Object.entries(R.hitBuckets).sort((a, b) => b[1] - a[1])
+  .map(([k, v]) => `${k} ${v}`).join('  ') || 'none'));
+console.log('  impact tags: ' + (Object.entries(R.hitTags).sort((a, b) => b[1] - a[1])
+  .map(([k, v]) => `${k} ${v}`).join('  ') || 'none'));
 for (const d of R.deathCtx) console.log('    dead: ' + JSON.stringify(d));
+if (args.verbose) for (const h of R.hitCtx) console.log('    hit: ' + JSON.stringify(h));
 console.log(`  horns ${R.horns}  panics ${R.panics}  lane changes ${R.laneChanges}  states ${JSON.stringify(R.states)}`);
 if (args.verbose) {
   // Forensics. `blockedBy` raycasts forward from any car that is on the
@@ -392,6 +451,8 @@ if (args.verbose) {
   for (const f of R.blockedBy) console.log('    ' + JSON.stringify(f));
   console.log('  frozen samples:');
   for (const f of R.frozen) console.log('    ' + JSON.stringify(f));
+  console.log('  longest-stop trace:');
+  for (const t of R.stuck.trace) console.log('    ' + JSON.stringify(t));
   console.log('  fastest car: ' + JSON.stringify(R.fastCtx));
   console.log(`  abandoned wrecks now ${R.abandonedNow}; no driver and not parked:`);
   console.log('    ' + JSON.stringify(R.censusX));
@@ -475,7 +536,83 @@ function installProbe() {
     reversals: new Map(),
     carSeconds: new Map(),
     projTmp: { s: 0, lateral: 0 },
+    laneTmp: { s: 0, lateral: 0 },
+    hitBuckets: {},
+    hitTags: {},
+    hitCtx: [],
+    traces: new Map(),
+    traceLen: new Map(),
   };
+
+  /** Junction nodes (links > 2), for bucketing collisions by location. */
+  const JN = [];
+  for (const n of roads.nodes) if (n && n.links && n.links.length > 2) JN.push(n);
+  function junctionDist(x, z) {
+    let best = Infinity;
+    for (let i = 0; i < JN.length; i++) {
+      const d = Math.hypot(JN[i].x - x, JN[i].z - z);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  /**
+   * LANE-KEEPING ERROR AGAINST THE EMITTED LANE GEOMETRY (rule 12).
+   *
+   * `d.diag.lat` is the CONTROLLER'S OWN cross-track belief — the very number
+   * the round-1 lane-adoption rewrite edits when it re-decides which lane the
+   * car is in. A gate that reads it back is comparing the controller to
+   * itself: adopt the lane you drifted into and the "error" vanishes with no
+   * car having moved. This measures instead where the DRAWN car sits relative
+   * to the nearest usable lane centre of the road graph's own geometry:
+   * nearest edge by plan+height, plus the edge the driver is on as a second
+   * candidate (same reason the off-carriageway check uses both — the nearest
+   * CENTRELINE to a car in the outer lane of a six-lane parkway is often a
+   * side street). Direction comes from the car's drawn heading, never from
+   * the driver's plan; a car pointing the wrong way down a one-way is scored
+   * against every lane rather than excused.
+   *
+   * Returns { err, mid } or null when no edge is plausibly under the car —
+   * those frames are already the off-carriageway check's business.
+   */
+  function laneErrOf(v, d) {
+    let bestErr = Infinity;
+    let bestMid = false;
+    let seen = false;
+    const L = traffic.lanes;
+    const consider = (e) => {
+      if (!e || e.rail || !L.sane?.(e)) return;
+      const na = roads.nodes[e.a];
+      const nb = roads.nodes[e.b];
+      if (!na || !nb) return;
+      L.project(e, 0, v.position.x, v.position.z, S.laneTmp); // lane 0 runs a->b
+      const sAB = S.laneTmp.s;
+      if (sAB < -2 || sAB > e.len + 2) return; // off the span
+      const t = Math.max(0, Math.min(1, sAB / e.len));
+      const ey = na.y + (nb.y - na.y) * t;
+      if (Math.abs(ey - v.position.y) > 6) return; // a bridge deck / a quay
+      const dir = Math.sin(v._yaw) * e.dx + Math.cos(v._yaw) * e.dz >= 0 ? 1 : -1;
+      let lo = L.laneLo(e, dir);
+      let hi = L.laneHi(e, dir);
+      if (hi < lo) { lo = 0; hi = e.lanes - 1; }
+      for (let k = lo; k <= hi; k++) {
+        L.project(e, k, v.position.x, v.position.z, S.laneTmp);
+        const err = Math.abs(S.laneTmp.lateral);
+        if (err < bestErr) {
+          bestErr = err;
+          bestMid = S.laneTmp.s > 14 && e.len - S.laneTmp.s > 14;
+        }
+        seen = true;
+      }
+    };
+    const ne = roads.nearestEdge(v.position.x, v.position.z, 60, v.position.y);
+    consider(ne?.edge);
+    if (d._count > 0) {
+      const e0 = d._edge(0);
+      if (e0 !== ne?.edge) consider(e0);
+    }
+    return seen ? { err: bestErr, mid: bestMid } : null;
+  }
 
   /** 2D OBB overlap depth via SAT. 0 when separated. */
   function obbDepth(ax, az, ah, aw, al, bx, bz, bh, bw, bl) {
@@ -530,6 +667,11 @@ function installProbe() {
     const drivers = traffic.drivers;
     const list = vehicles.vehicles;
     const dt = 1 / 60;
+
+    // Stamp when each driver got its current car, for the 'spawn' hit tag.
+    for (const d of drivers) {
+      if (d.__vBound !== d.vehicle) { d.__vBound = d.vehicle; d.__bornF = S.frames; }
+    }
 
     S.peakCars = Math.max(S.peakCars, drivers.length);
     S.peakParked = Math.max(S.peakParked, traffic.parking.count);
@@ -610,33 +752,44 @@ function installProbe() {
 
       /**
        * LANE KEEPING is only meaningful MID-BLOCK. Through a junction a car
-       * cuts the corner by design, so its offset from the link it is leaving
+       * cuts the corner by design, so its offset from the lane it is joining
        * is metres — measuring that as "lane error" reported 19% of the city
-       * driving on the pavement when nothing was.
+       * driving on the pavement when nothing was. The mid-block test comes
+       * from the graph projection inside `laneErrOf`, not the driver's `_s`.
+       *
+       * Measured at 20 Hz per car (every 3rd tick) — `laneErrOf` runs a
+       * `nearestEdge` query, and every tick for the whole fleet is harness
+       * cost for no statistical gain.
        */
-      const lat = Math.abs(d.diag.lat);
-      const rem = d._count > 0 ? d._llen[d._slot(0)] - d._s : 99;
-      const midBlock = d._count > 0 && d._s > 14 && rem > 14;
       S.allCars.add(d.id);
-      if (lat > 10) S.badCars.add(d.id);
       if (Math.abs(v.forwardSpeed) > S.fastest) {
         S.fastest = Math.abs(v.forwardSpeed);
         S.fastCtx = { v: +v.forwardSpeed.toFixed(1), t: v.type, kind: d._count ? d._edge(0).kind : '?',
-          lat: +lat.toFixed(1), y: +v.position.y.toFixed(1), g: v.grounded, hp: Math.round(v.health) };
+          lat: +d.diag.lat.toFixed(1), y: +v.position.y.toFixed(1), g: v.grounded, hp: Math.round(v.health) };
       }
-      if (midBlock) {
-        S.latSum += lat;
-        S.latN++;
-        if (lat > S.latMax) {
-          S.latMax = lat;
-          S.latWorst = {
-            lat: +lat.toFixed(2), avoid: +d._avoid.toFixed(2), blend: +d._laneBlend.toFixed(2),
-            swerve: +d._swerve.toFixed(2), links: d._count, s: +d._s.toFixed(1),
-            len: +d._llen[d._slot(0)].toFixed(1), state: d.state, reason: d.diag.reason,
-            kind: d._edge(0).kind, v: +v.forwardSpeed.toFixed(1),
-          };
+      if (S.frames % 3 === 0) {
+        const le = laneErrOf(v, d);
+        if (le) {
+          const lat = le.err;
+          if (lat > 10) S.badCars.add(d.id);
+          if (le.mid) {
+            S.latSum += lat;
+            S.latN++;
+            if (lat > S.latMax) {
+              S.latMax = lat;
+              S.latWorst = {
+                lat: +lat.toFixed(2), bel: +d.diag.lat.toFixed(2),
+                avoid: +d._avoid.toFixed(2), blend: +d._laneBlend.toFixed(2),
+                swerve: +d._swerve.toFixed(2), links: d._count, s: +d._s.toFixed(1),
+                len: d._count > 0 ? +d._llen[d._slot(0)].toFixed(1) : 0,
+                state: d.state, reason: d.diag.reason,
+                kind: d._count > 0 ? d._edge(0).kind : '?', v: +v.forwardSpeed.toFixed(1),
+                x: +v.position.x.toFixed(0), z: +v.position.z.toFixed(0),
+              };
+            }
+            if (S.frames % 6 === 0) S.lats.push(lat);
+          }
         }
-        if (S.frames % 7 === 0) S.lats.push(lat);
       }
       /**
        * OFF THE CARRIAGEWAY is measured against the road graph itself, not
@@ -737,14 +890,47 @@ function installProbe() {
       if (Math.abs(v.forwardSpeed) < 0.3) {
         const r = (S.stopRun.get(key) ?? 0) + dt;
         S.stopRun.set(key, r);
+        // Trace every long runner: what was the signal doing while it waited?
+        // Per-key ring buffers, because the eventual record holder is not
+        // knowable until the run ends.
+        if (r > 18 && S.frames % 120 === 0 && d._count > 0 &&
+            (S.traces.has(key) || S.traces.size < 10)) {
+          let tr = S.traces.get(key);
+          if (!tr) S.traces.set(key, (tr = []));
+          if (tr.length < 40) {
+            const e0 = d._edge(0);
+            const n0 = traffic.lanes.toNode(e0, d._lane(0));
+            tr.push({
+              r: +r.toFixed(0), ph: traffic.phaseFor(n0, e0.id),
+              ttg: +traffic.timeToGreen(n0, e0.id).toFixed(0),
+              v: +v.forwardSpeed.toFixed(2), thr: +v.input.throttle.toFixed(2),
+              stop: +Math.min(99, d._stopDist).toFixed(1),
+              gap: +Math.min(99, d._lead.gap).toFixed(1),
+              rsn: d.diag.reason, st: d._stall, k: d._stallStrikes,
+              x: +v.position.x.toFixed(0), z: +v.position.z.toFixed(0),
+            });
+          }
+          S.traceLen.set(key, r);
+        }
         if (r > S.stopWorst) {
           S.stopWorst = r;
+          // What does the SIGNAL think? A worst-stop blamed on a light that
+          // `timeToGreen` says will never come is a lights defect, not a queue.
+          let ttg = -1;
+          let ph = null;
+          if (d._count > 0) {
+            const e0 = d._edge(0);
+            const n0 = traffic.lanes.toNode(e0, d._lane(0));
+            ttg = +traffic.timeToGreen(n0, e0.id).toFixed(1);
+            ph = traffic.phaseFor(n0, e0.id);
+          }
           S.stopCtx = {
             secs: +r.toFixed(1), t: v.type, state: d.state, reason: d.diag.reason,
             stall: d._stall, exc: d._excused, stop: +Math.min(999, d._stopDist).toFixed(1),
             gap: +Math.min(999, d._lead.gap).toFixed(1), thr: +v.input.throttle.toFixed(2),
             br: +v.input.brake.toFixed(2), lat: +d.diag.lat.toFixed(1), links: d._count,
-            av: +d._avoid.toFixed(1), x: +v.position.x.toFixed(0), z: +v.position.z.toFixed(0),
+            av: +d._avoid.toFixed(1), ttg, ph,
+            x: +v.position.x.toFixed(0), z: +v.position.z.toFixed(0),
           };
         }
       } else if (S.stopRun.get(key) > 20) {
@@ -784,8 +970,73 @@ function installProbe() {
       });
     }
   });
+  // Pre-existing drivers are not "fresh spawns" for the hit tags below.
+  for (const d of traffic.drivers) { d.__vBound = d.vehicle; d.__bornF = -9999; }
+
+  /**
+   * BUCKET every big impact by WHERE and by MECHANISM, so "the collision rate
+   * is 5x the goal" decomposes into something cuttable. Mechanism comes from
+   * the drawn poses (relative heading + bearing), location from distance to
+   * the nearest junction node, and the tags from the drivers' manoeuvre state
+   * at the moment of impact. `spawn` = the striking driver got its car within
+   * the last 5 s.
+   */
   e.events.on('vehicle:collision', (p) => {
-    if ((p?.impulse ?? 0) > (p?.vehicle?.mass ?? 1e9) * 2) S.bigHits++;
+    if ((p?.impulse ?? 0) <= (p?.vehicle?.mass ?? 1e9) * 2) return;
+    S.bigHits++;
+    const v = p.vehicle;
+    const o = p.other;
+    const isVeh = !!o?.isVehicle;
+    const da = traffic.driverOf(v);
+    const db = isVeh ? traffic.driverOf(o) : null;
+    let mech;
+    if (!isVeh) {
+      // A wall/kerb face across the bumper and a hard landing on the road
+      // surface are different defects: split them on the contact normal.
+      mech = Math.abs(p.normal?.y ?? 0) > 0.6 ? 'ground' : 'wall';
+    } else {
+      const ya = yawOf(v);
+      const yb = yawOf(o);
+      const dot = Math.cos(ya - yb);
+      const ahead = (o.position.x - v.position.x) * Math.sin(ya) +
+        (o.position.z - v.position.z) * Math.cos(ya);
+      const park = o.isParked || o.parked || o.userData?.owParked;
+      if (park) mech = 'parked';
+      else if (!db && o.speed < 0.6) mech = 'wreck';
+      else if (dot > 0.5) mech = ahead >= 0 ? 'rearend' : 'rearended';
+      else if (dot < -0.5) mech = 'headon';
+      else mech = 'cross';
+    }
+    const jd = junctionDist(v.position.x, v.position.z);
+    const where = jd < 14 ? 'junction' : 'midblock';
+    const tags = [];
+    const flag = (d, sfx) => {
+      if (!d) { tags.push('nodrv' + sfx); return; }
+      if (S.frames - (d.__bornF ?? -9999) < 300) tags.push('spawn' + sfx);
+      if (Math.abs(d._laneBlend) > 0.3) tags.push('lc' + sfx);
+      if (Math.abs(d._avoid) > 0.3 || Math.abs(d._swerve) > 0.3) tags.push('dodge' + sfx);
+      if (d.state !== 'drive') tags.push(d.state + sfx);
+      if (Math.abs(d.diag.lat) > 2.2) tags.push('offlane' + sfx);
+    };
+    flag(da, 'A');
+    if (isVeh) flag(db, 'B');
+    const key = where + '/' + mech;
+    S.hitBuckets[key] = (S.hitBuckets[key] ?? 0) + 1;
+    for (const t of tags) S.hitTags[t] = (S.hitTags[t] ?? 0) + 1;
+    if (S.hitCtx.length < 20) {
+      S.hitCtx.push({
+        f: S.frames, mech, jd: +jd.toFixed(0),
+        a: v.type + (da ? ':' + da.state + '/' + da.diag.reason : '') +
+          '@' + Math.abs(v.forwardSpeed).toFixed(1),
+        b: isVeh
+          ? o.type + (db ? ':' + db.state + '/' + db.diag.reason : '') +
+            '@' + Math.abs(o.forwardSpeed).toFixed(1)
+          : String(o?.name ?? 'world'),
+        imp: +((p.impulse ?? 0) / Math.max(1, v.mass)).toFixed(1),
+        ny: +(p.normal?.y ?? 0).toFixed(2),
+        tags, x: +v.position.x.toFixed(0), z: +v.position.z.toFixed(0),
+      });
+    }
   });
 
   window.__TRAFFIC_PROBE__ = {
@@ -856,7 +1107,13 @@ function installProbe() {
           max: S.roadMax,
           worst: S.worst,
         },
-        stuck: { worst: S.stopWorst, over20: S.stopOver20, ctx: S.stopCtx },
+        stuck: {
+          worst: S.stopWorst, over20: S.stopOver20, ctx: S.stopCtx,
+          trace: [...S.traces.entries()]
+            .sort((a, b) => (S.traceLen.get(b[0]) ?? 0) - (S.traceLen.get(a[0]) ?? 0))
+            .slice(0, 2)
+            .flatMap(([, tr]) => tr),
+        },
         speeding: {
           pct: S.carFrames ? (S.speeding / S.carFrames) * 100 : 0,
           worstRatio: S.worstRatio,
@@ -888,6 +1145,7 @@ function installProbe() {
         abandonedNow: traffic._abandoned.length,
         totalVehicles: vehicles.vehicles.length,
         deaths: S.deaths, deathCtx: S.deathCtx, bigHits: S.bigHits,
+        hitBuckets: S.hitBuckets, hitTags: S.hitTags, hitCtx: S.hitCtx,
         despawns: st.despawns,
         fastest: S.fastest, fastCtx: S.fastCtx,
         census,

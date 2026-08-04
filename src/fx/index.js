@@ -159,6 +159,13 @@ export class FxSystem {
     // The Point Fountain's water — anchored at runtime to the emitted basin,
     // budgeted out of the shared lit ring. See fountain.js.
     this.fountain = new FountainFx(this, { budget });
+    // `?nofountain=1` holds the water with no code edit — the imagediff arm of
+    // the capture-determinism check in fountainprobe.mjs (a frame WITH the
+    // fountain must differ from one without it, or "two identical captures
+    // match" is vacuous). Same pattern as world's `?noairfield=1`.
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('nofountain') === '1') {
+      this.fountain.debugDisable = true;
+    }
 
     this.vehicleFx = new VehicleFx(this);
     this.worldFx = new WorldFx(this, { enabled: budget >= 1500 });

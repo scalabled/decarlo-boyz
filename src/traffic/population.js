@@ -278,6 +278,22 @@ export class Director {
     const spec = sys.vehicles.specOf(type);
     const y = ground + spec.comY + 0.06;
     const yaw = L.yaw(e, lane);
+    /**
+     * Never materialise a car AIMED AT A WALL. The lane test above only sees
+     * other vehicles; a bridge abutment or a prop standing on the carriageway
+     * is invisible to it, and a car spawned at road speed 10 m from one is a
+     * guaranteed hard impact before its driver's own probe has had a single
+     * tick — MEASURED: 5 of 35 big impacts in a 3-min downtown run were cars
+     * less than 5 s old, several against bridge colliders. Same ray the
+     * driver's `_probeAhead` uses, cast once at spawn time.
+     */
+    const phys = sys.physics;
+    if (phys?.raycast) {
+      const h = phys.raycast(
+        _v.x, ground + 0.55, _v.z, Math.sin(yaw), 0, Math.cos(yaw), 18, phys.MASK.WORLD
+      );
+      if (h.hit && Math.abs(h.normal.y) < 0.65) return null;
+    }
     const veh = sys.vehicles.spawn(type, _v.set(_v.x, y, _v.z), yaw, { rng: sys.rng });
     if (!veh) return null;
     veh.isTraffic = true;
