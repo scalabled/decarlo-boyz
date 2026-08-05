@@ -249,6 +249,8 @@ export class WorldQuery {
   findRoadSpot(min, max, cx, cz, out = this._spot) {
     const roads = this.world?.roads;
     out.ok = false;
+    /** Best OFF-annulus road point seen, in case nothing legal ever lands. */
+    let bx = 0, bz = 0, byaw = 0, bPen = Infinity;
     for (let i = 0; i < 120; i++) {
       const a = this.rng.float() * TAU;
       const r = lerp(min, max, this.rng.float());
@@ -262,17 +264,50 @@ export class WorldQuery {
       const hit = roads.nearestEdge(x, z, 40);
       if (!hit?.edge) continue;
       // Snap onto the lane centre so nothing spawns half on the kerb.
+      let px = x, pz = z, pyaw = a;
       if (roads.laneCenter) {
         const t = clamp01(typeof hit.t === 'number' ? hit.t : 0.5);
         roads.laneCenter(hit.edge.id ?? hit.edge, hit.lane ?? 0, t, this._v);
         if (this.isWater(this._v.x, this._v.z)) continue;
-        out.x = this._v.x;
-        out.z = this._v.z;
-        out.yaw = roads.laneYaw ? roads.laneYaw(hit.edge, hit.lane ?? 0) : a;
-      } else {
-        out.x = x; out.z = z; out.yaw = a;
+        px = this._v.x;
+        pz = this._v.z;
+        pyaw = roads.laneYaw ? roads.laneYaw(hit.edge, hit.lane ?? 0) : a;
       }
+      /**
+       * THE SNAP MUST NOT BREAK THE PROMISE. The sample above is inside the
+       * annulus, but `nearestEdge` searches 40 m and `laneCenter` moves the
+       * point onto the road — so the RETURNED spot could sit anywhere from
+       * 0 m to `max + 40` m out. MEASURED on requests for 22-30 m: answers at
+       * 1.5 m (a cruiser materialising against the player's hip) and 52.7 m —
+       * and 52.7 m is past the 35 m kill-attribution window (`ATTRIB_VEH_NEAR`,
+       * freeroam.js), which made the playtest's cop-kill reward checks flake
+       * 1-in-3: a wreck staged "22-30 m away" landed 36-53 m away, and the
+       * reward path — correctly, per the same anti-clairvoyance rule the
+       * ped-kill check asserts — refused to pay for it. Re-measure the SNAPPED
+       * point against the caller's own annulus and keep sampling when the road
+       * pulled it outside; the nearest miss is kept as a last resort so a
+       * road-sparse area still gets a road-legal spot rather than nothing.
+       */
+      const d = Math.hypot(px - cx, pz - cz);
+      const pen = d < min ? min - d : d > max ? d - max : 0;
+      if (pen > 0) {
+        if (pen < bPen) { bPen = pen; bx = px; bz = pz; byaw = pyaw; }
+        continue;
+      }
+      out.x = px;
+      out.z = pz;
+      out.yaw = pyaw;
       out.y = this.groundY(out.x, out.z);
+      out.ok = true;
+      return out;
+    }
+    // Roads exist around here, just none whose lane centre falls inside the
+    // ring that was asked for: hand back the closest road point found. It is
+    // drivable and legal — merely off-annulus, exactly what every caller got
+    // on EVERY answer before the recheck above existed.
+    if (bPen < Infinity) {
+      out.x = bx; out.z = bz; out.yaw = byaw;
+      out.y = this.groundY(bx, bz);
       out.ok = true;
       return out;
     }

@@ -1640,21 +1640,39 @@ async function testEconomy() {
 
   // 6. Kill rewards, cop units: +8 respect a cruiser, 70% drop — and a
   //    civilian sedan pays NOTHING (negative control).
+  //
+  //    Three flake modes were measured out of this check (it sat at ~1-in-3):
+  //    - `findRoadSpot(22, 30)` used to hand back lane-snapped points up to
+  //      52.7 m out (the snap radius is 40 m), past the 35 m ATTRIB_VEH_NEAR
+  //      window — so a unit staged "22-30 m away" paid nothing, correctly, per
+  //      the same attribution rule check 7 asserts for peds. Fixed at the seam
+  //      in `util.js`; `src/game/copkillprobe.mjs` is the gate on it.
+  //    - a full 64-slot pickup pool voids drops to the wallet: stale drops are
+  //      cleared first, same hygiene as check 5 above.
+  //    - four 70% rolls all missing is 0.8% — a real once-a-week red. If the
+  //      first four units drop nothing the sample extends (to 8), each extra
+  //      unit still asserted at +8/+1, which puts the no-drop tail at 0.3^8.
   const cops = await inGame(`
+    for (const p of game.pickups.live.slice()) {
+      if (p.kind === 'cash' && !p.ambient) game.pickups.despawn(p);
+    }
     const pos = game.wq.playerPos();
     const r0 = game.economy.respect;
     const ck0 = game.freeroam.copKills;
-    const drops0 = game.pickups.live.filter((p) => p.kind === 'cash' && !p.ambient).length;
-    let wrecked = 0;
-    for (let i = 0; i < 4; i++) {
+    const nDrops = () =>
+      game.pickups.live.filter((p) => p.kind === 'cash' && !p.ambient).length;
+    let wrecked = 0, attempts = 0;
+    for (let i = 0; i < 8; i++) {
+      if (i >= 4 && nDrops() >= 1) break;
       const s = game.wq.findRoadSpot(22, 30, pos.x, pos.z);
       const v = game.wq.spawnVehicle('police', s.x, s.z, 0);
       if (!v) continue;
+      attempts++;
       vehicles.damage(v, v.health + 20, v.position);
       if (v.destroyed) wrecked++;
     }
     const copR = game.economy.respect - r0;
-    const drops = game.pickups.live.filter((p) => p.kind === 'cash' && !p.ambient).length - drops0;
+    const drops = nDrops();
     // negative control: a civilian wreck is worth nothing
     const r1 = game.economy.respect;
     const s2 = game.wq.findRoadSpot(22, 30, pos.x, pos.z);
@@ -1662,10 +1680,11 @@ async function testEconomy() {
     if (c) vehicles.damage(c, c.health + 20, c.position);
     const civR = game.economy.respect - r1;
     game.heat.clear('probe');
-    return { wrecked, copR, drops, copKills: game.freeroam.copKills - ck0, civR };`);
+    return { wrecked, attempts, copR, drops, copKills: game.freeroam.copKills - ck0, civR };`);
   out.push({
-    name: 'wrecking 4 cop units pays +8 respect each with drops; a sedan pays 0',
-    ok: cops.wrecked === 4 && cops.copR === 32 && cops.copKills === 4 &&
+    name: 'wrecking 4+ cop units pays +8 respect each with drops; a sedan pays 0',
+    ok: cops.wrecked >= 4 && cops.wrecked === cops.attempts &&
+        cops.copR === cops.wrecked * 8 && cops.copKills === cops.wrecked &&
         cops.drops >= 1 && cops.civR === 0,
     detail: `${cops.wrecked} wrecked, +${cops.copR} respect, ${cops.drops} drops, ` +
       `copKills +${cops.copKills}, civilian wreck +${cops.civR}`,
