@@ -496,6 +496,67 @@ const GATE = [
     why: 'overcast — the sky ceiling must not get flatter than it already is',
     checks: [['ceiling', '<=', 6.5, 6.04, 'per cent of frame above code 240 with 8x8 sd under 2 (goal ~0)']],
   },
+  /**
+   * ---------------------------------------------------------------------------
+   * THE MOON-INDEPENDENT DEEP-NIGHT GROUND FLOOR — the case this pass adds.
+   * ---------------------------------------------------------------------------
+   * The night ambient's whole moon term collapses to zero on any night the moon
+   * has set or is new (`moonPhase`*`discM`*keyRamp), and on those nights open
+   * ground away from a lamp is a near-black, faintly sodium-warm field you cannot
+   * read the terrain off. `src/sky/index.js` adds a moon-INDEPENDENT cool
+   * starlight/skyglow floor (NIGHT_STARFLOOR_HUE) that fills in exactly when the
+   * moon is absent. This case proves it on EMITTED pixels: a downtown open street
+   * at 04:00 with the moon 9 degrees BELOW the horizon must stay navigable AND
+   * COOL — on the light the floor adds, not on a moon that is not there.
+   *
+   * The negative control is `?nonightfloor=1` (the floor disabled at the live
+   * code, mirroring the debugIgnore* pattern). With the floor gone the SAME frame
+   * must go RED: its median luma crushes and its ground goes WARM, because the
+   * only night term left over open ground is the warm urban skyglow. A floor
+   * whose failure mode is invisible needs an arm where its removal is visible.
+   *
+   * Note what is NOT gated here: whole-frame crushed-% (`below002`). A deep-night
+   * frame is ~28% dark SKY, which the floor deliberately does not lift (the sky
+   * must read as night, stars out), so a crush-% threshold would measure the sky,
+   * not the ground. Median luma and the surface's own warmth measure the GROUND.
+   */
+  {
+    shot: 'downtown moonless street',
+    slug: 'moonless',
+    spec: '{"pos":[-232,5,150],"look":[-232,22,-40],"fov":62,"time":4,"ground":true,"clearTraffic":34}',
+    surface: 'night',
+    why: 'moon 9deg BELOW the horizon — open ground stays navigable and COOL on the starlight floor, not the moon',
+    checks: [
+      ['frame.p50', '>=', 20, 33, 'median display luma of the open street — the floor lifts it from a crushed 11'],
+      ['surf.keyWarmth', '<=', 14, 4.5, 'the ground reads COOL — it is not warmed the way the bare sodium skyglow warms it'],
+    ],
+    control: {
+      params: 'nonightfloor=1',
+      mustFail: [
+        ['frame.p50', '<', 20, 11, 'floor OFF: the open street crushes to a median of 11'],
+        ['surf.keyWarmth', '>', 22, 36.1, 'floor OFF: the ground goes WARM — only the sodium skyglow is left over it'],
+      ],
+    },
+  },
+  {
+    shot: 'downtown moonlit street',
+    slug: 'moonlit',
+    spec: '{"pos":[-232,5,150],"look":[-232,22,-40],"fov":62,"time":1.5,"ground":true,"clearTraffic":34}',
+    surface: 'night',
+    /**
+     * The MOONLIT night must still pass. The floor is a FLOOR, not an add: it is
+     * faded OUT under a moon (`moonPresence`=1 at moonAlt 18deg here, so
+     * `starFloor` is exactly 0), so this frame is byte-for-byte what it was before
+     * the floor existed. Asserting it is navigable and cool proves the floor did
+     * not touch the money night — the case cannot distinguish floor on/off, and
+     * that is the point.
+     */
+    why: 'the moonlit night is unchanged (floor faded out under the moon) and must still read navigable + cool',
+    checks: [
+      ['frame.p50', '>=', 18, 26, 'moonlit median display luma (the floor is off here)'],
+      ['surf.keyWarmth', '<=', 0, -18.6, 'moonlit ground is cool (blue Purkinje night)'],
+    ],
+  },
 ];
 
 /**
@@ -520,17 +581,40 @@ function pick(r, path) {
 if (args.gate) {
   let bad = 0;
   for (const g of GATE) {
-    const f = capture(g.shot, `${dir}/gate-${g.shot}.png`, args.params || '');
-    const r = report(g.shot, f, g.shot);
+    // A case may either name a built-in shot (g.shot doubles as the shot id and
+    // the surface key) or carry an inline `spec` (arbitrary JSON pose) with its
+    // own `surface` key and human `shot` label. `slug` is the filename/report id.
+    const shotArg = g.spec ?? g.shot;
+    const surfKey = g.surface ?? g.shot;
+    const slug = g.slug ?? g.shot;
+    const f = capture(shotArg, `${dir}/gate-${slug}.png`, g.params ?? args.params ?? '');
+    const r = report(slug, f, surfKey);
     console.log(`${''.padEnd(22)} ${g.why}`);
     for (const [path, op, lim, was, what] of g.checks) {
       const v = pick(r, path);
       const ok = op === '>=' ? v >= lim : v <= lim;
       if (!ok) bad++;
       console.log(
-        `  ${ok ? 'PASS' : 'FAIL'}  ${g.shot}.${path} = ${v.toFixed(2)} ${op} ${lim} ` +
+        `  ${ok ? 'PASS' : 'FAIL'}  ${slug}.${path} = ${v.toFixed(2)} ${op} ${lim} ` +
           `(RATCHET, measured ${was}) — ${what}`
       );
+    }
+    // Per-case negative control: capture the SAME pose with the fix disabled and
+    // require it to go RED. This is the arm that makes the numbers above mean
+    // something — a floor that is never removed is not evidence it does anything.
+    if (g.control) {
+      const cf = capture(shotArg, `${dir}/gate-${slug}-control.png`, g.control.params);
+      const cr = report(`${slug} CONTROL`, cf, surfKey);
+      console.log(`${''.padEnd(22)} negative control: ${g.control.params} — the floor removed, this frame MUST go red`);
+      for (const [path, op, lim, was, what] of g.control.mustFail) {
+        const v = pick(cr, path);
+        const went = op === '<' ? v < lim : v > lim;
+        if (!went) bad++;
+        console.log(
+          `  ${went ? 'PASS' : 'FAIL'}  ${slug}.control.${path} = ${v.toFixed(2)} ${op} ${lim} ` +
+            `(measured ${was}) — ${what}`
+        );
+      }
     }
   }
   const cf = capture(CONTROL.shot, `${dir}/gate-control.png`, CONTROL.params);

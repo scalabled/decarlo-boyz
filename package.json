@@ -87,6 +87,7 @@
     "pedshadow": "node src/peds/shadowprobe.mjs",
     "street": "node src/peds/streetprobe.mjs",
     "keylight": "node src/sky/keyprobe.mjs",
+    "keygate": "node src/sky/keyprobe.mjs --gate",
     "shotgate": "node src/render/shotprobe.mjs",
     "slotgate": "node src/render/slotprobe.mjs --gate",
     "lampgate": "node src/props/lampprobe.mjs --gate",

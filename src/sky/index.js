@@ -113,6 +113,61 @@ const NIGHT_AMBIENT_HUE = [0.35, 0.5, 1.0];
 const SKYGLOW_HUE = [1.0, 0.93, 0.86];
 
 /**
+ * ---------------------------------------------------------------------------
+ * STARLIGHT / SKYGLOW GROUND FLOOR — the reason open terrain is navigable on a
+ * MOONLESS night, when nothing else in this subsystem lights it
+ * ---------------------------------------------------------------------------
+ *
+ * The night ambient has three sources and, on many nights, none of them.
+ * `daySky` is the sun's residual scatter and is numerically dead a degree below
+ * the horizon; `twilightSky` is gone by nautical dusk; and the whole moon term
+ * `moonAmb * moonI` is multiplied by `moonPhase` (→0 at new moon) and by the
+ * moon's disc fraction `discM` (→0 whenever the moon is BELOW the horizon). The
+ * moon rises ~50 minutes later each in-game day and its phase advances, so on a
+ * large fraction of nights the moon has set — or never risen high — during the
+ * deep hours, and the moon fill is simply ZERO. What is left is the warm urban
+ * `SKYGLOW` (0.16 clear), and a lone warm 0.16 over open ground away from any
+ * lamp is a near-black, faintly sodium-grey field you cannot read the terrain
+ * off. MEASURED at the airfield (open area) 03:00: mean luma 36/255 with 34% of
+ * the frame near-black and 56% of the FOREGROUND GROUND near-black — the moon is
+ * at +1.6 degrees delivering essentially nothing.
+ *
+ * The physics the model was missing here is not the moon and not the city: it is
+ * that the night sky is NEVER actually black. Starlight, zodiacal light, airglow
+ * and integrated skyglow put a small, cool, direction-less floor of a few
+ * millilux over everything, every clear night, regardless of the moon. That is
+ * the term this is. Four properties, each load-bearing:
+ *
+ *  1. IT IS MOON-INDEPENDENT. It contains no `moonPhase`, no `moonAlt`, no
+ *     `discM`. That is the whole point: the failure it fixes is a moon that has
+ *     collapsed to zero, so a floor that also collapses with the moon would fix
+ *     nothing. It is present exactly when the moon is NOT (see property 4), so
+ *     it never depends on the moon being up.
+ *  2. IT IS COOL, NOT WARM. atmosphere.js is explicit that the sky owns the cool
+ *     side of the night's key:fill ratio and the sodium lamps are the warm POOLS
+ *     inside it — a warm floor destroys "night reads as night". So this is
+ *     blue-cool, and it makes a moonless open field read as a cool night rather
+ *     than the dull warm-grey the lone skyglow left. Red is kept alive at 0.5 so
+ *     brick and rust do not die (the old 4.8:1 blue trap in atmosphere.js).
+ *  3. IT IS NIGHT-ONLY, gated on the SAME `duskRamp` the urban skyglow uses,
+ *     which is provably, exactly zero for any solar altitude at or above the
+ *     horizon. No daylight, golden-hour or disc-up dusk frame can see it, which
+ *     is proven by day-shot capture (RMSE 0), not asserted.
+ *  4. IT IS A FLOOR, NOT AN ADD. It is faded out by `moonPresence` — the moon's
+ *     OWN ground fill, measured before the renderer-handover clamp — so a bright
+ *     moonlit night (which is already navigable and must NOT be over-brightened
+ *     into looking like dusk) gets none of it, and the crossfade to a moonless
+ *     one is smooth. The moon fill sits ON this floor and replaces it.
+ *
+ * It rides `ambientColor`, which the renderer turns into the surfaces' diffuse
+ * fill (RenderSystem._updateBounceFill / the sky SH). It does NOT touch the sky
+ * dome (drawn from uSun/uMoonIrradiance) or the stars, so the sky keeps reading
+ * as deep night while the GROUND under it becomes legible — which is the whole
+ * ask.
+ */
+const NIGHT_STARFLOOR_HUE = [0.5, 0.66, 1.0];
+
+/**
  * Live tunables for the night floor, in scene light units (1 unit = 25 000 lux;
  * see atmosphere.js). Kept on the instance so they can be swept in one browser
  * session without a rebuild, which is how these numbers were chosen.
@@ -164,11 +219,47 @@ const SKYGLOW_HUE = [1.0, 0.93, 0.86];
  *
  * i.e. inside the run-to-run noise of a living city, because every term here is
  * behind a ramp that is identically zero while the sun is above the horizon.
+ *
+ *  starFloor     the moon-INDEPENDENT cool ground floor (see NIGHT_STARFLOOR_HUE)
+ *                — the blue-channel radiance of a starlight/skyglow hemisphere,
+ *                faded IN as the moon fades OUT so open terrain stays navigable
+ *                on a moonless / moon-down night. It is a floor, not an add: on a
+ *                moonlit night `moonPresence` is 1 and this is 0, so the money
+ *                night shots do not move.
+ *
+ *                MEASURED, 960x540, on the two open/lamp cases this exists for,
+ *                moon down, floor 0.00 -> 0.70 (mean luma 0-255 / % near-black<8):
+ *
+ *                  downtown 02:30, open street away from the lamps (the pain):
+ *                    foreground GROUND   mean 24.4 -> 27.3   near-black 4.3% -> 2.2%
+ *                    whole frame         mean 32.1 -> 33.2   near-black 6.7% -> 5.3%
+ *                  airfield 04:00, midground terrain band (what you drive toward):
+ *                    band mean           42 -> 54
+ *
+ *                The value is a compromise, and the honest limit is worth writing
+ *                down: an AMBIENT floor lifts the MIDTONES of sky-visible ground
+ *                but cannot pull already-CRUSHED grazing/AO-occluded pixels out of
+ *                black, because the reason a MOONLIT open field reads (measured:
+ *                the same airfield near-ground goes from 46% near-black moonless
+ *                to 0% moonlit at the SAME ambient level) is the moon's
+ *                DIRECTIONAL key hitting every surface — which a hemisphere cannot
+ *                replicate. So the airfield's own black foreground (a grazing pad,
+ *                its meter held by a bright practical) barely moves; the terrain
+ *                you navigate toward, and every flat lamp-lit street, clearly do.
+ *                Pushing this high enough to brute-force the grazing case needs an
+ *                ambient far above noon that only 'works' because autoexposure
+ *                clamps it — fragile, and it would blow a truly unlit field to
+ *                daylight. 0.70 is the largest value that stays robustly night
+ *                (pools intact, reads cool not dusk) across both cases; lower it
+ *                if the render-side toe/shoulder work lands the same margin, and
+ *                a directional deep-night key (not a hemisphere) is the real fix
+ *                for the grazing case — both belong to src/render, not here.
  */
 const NIGHT_FILL_DEFAULTS = {
   glowClear: 0.16,
   glowOvercast: 0.62,
   moonAmbient: 1.8,
+  starFloor: 0.7,
 };
 
 /**
@@ -279,8 +370,11 @@ export const MINUTES_PER_GAME_DAY = 24 / DEFAULT_TIME_RATE / 60;
  *   sky.ambientColor             Color: the sky's own model of whole-sky
  *                                irradiance, hue AND level
  *   sky.skyglow                  the urban night-sky floor published this frame
- *   sky.nightFill                { glowClear, glowOvercast, moonAmbient } —
- *                                live tunables for it, see SKYGLOW_HUE
+ *   sky.starFloor                the moon-INDEPENDENT cool ground floor this
+ *                                frame — starlight/skyglow, see NIGHT_STARFLOOR_HUE
+ *   sky.nightFill                { glowClear, glowOvercast, moonAmbient,
+ *                                starFloor } — live tunables, see SKYGLOW_HUE
+ *                                and NIGHT_STARFLOOR_HUE
  *   sky.indirectScale            indirect-light budget for this sun elevation
  *   sky.exposureBias             EV of metering compensation (+ is darker)
  *   sky.cloudShadowAt(x, z)      0..1 direct sunlight reaching a ground point
@@ -343,6 +437,15 @@ export class SkySystem {
     const _q = typeof location !== 'undefined' ? location.search : '';
     this.debugNoSunKey = /[?&]owNoSunKey=1/.test(_q);
     this.debugOldSky = /[?&]owSkyOld=1/.test(_q);
+    /**
+     *   ?nonightfloor=1  disable the moon-independent deep-night ground floor
+     *                    (see NIGHT_STARFLOOR_HUE). The negative control for it:
+     *                    with the floor off, a MOONLESS open-ground frame goes
+     *                    crushed/near-black again, which is what `src/sky/keyprobe.mjs`
+     *                    asserts must happen — a floor whose failure mode is
+     *                    invisible needs an arm where its removal is visible.
+     */
+    this.debugNoNightFloor = /[?&]nonightfloor=1/.test(_q);
 
     this.celestial = new Celestial();
     this.hour = 16.5;
@@ -585,6 +688,8 @@ export class SkySystem {
     this.nightFill = { ...NIGHT_FILL_DEFAULTS };
     /** Skyglow irradiance published this frame, for diagnostics. */
     this.skyglow = 0;
+    /** Moon-independent cool ground floor published this frame, for diagnostics. */
+    this.starFloor = 0;
     /**
      * The skyglow's own contribution to `ambientColor`, as a colour.
      *
@@ -714,7 +819,7 @@ export class SkySystem {
           `sunI=${this.sunLight.intensity.toFixed(3)} sunCol=${sc.r.toFixed(2)},${sc.g.toFixed(2)},${sc.b.toFixed(2)} ` +
           `moonI=${this.moonLight.intensity.toFixed(4)} beamLum=${(this._beamLuminance ?? 0).toFixed(3)} ` +
           `amb=${this.ambientColor.r.toFixed(3)},${this.ambientColor.g.toFixed(3)},${this.ambientColor.b.toFixed(3)} ` +
-          `glow=${this.skyglow.toFixed(3)} ` +
+          `glow=${this.skyglow.toFixed(3)} starFloor=${this.starFloor.toFixed(3)} ` +
           `indirect=${this.indirectScale.toFixed(2)} evBias=${this.exposureBias.toFixed(2)} ` +
           `knee=${this.shared.uSkyRolloff.value.x.toFixed(3)} w=${this.model.state} wet=${this.model.wetness.toFixed(2)}`
       );
@@ -1244,6 +1349,14 @@ export class SkySystem {
     const mmax = Math.max(1e-6, mr, mg, mb);
     this.moonLight.color.setRGB(mr / mmax, mg / mmax, mb / mmax);
     let moonI = MOON_ILLUMINANCE_NIGHT * c.moonPhase * mmax * discM * keyRamp;
+    // The moon's OWN ground fill, before the renderer-handover clamp below turns
+    // it into a floor. This is the honest "is the moon lighting the ground"
+    // signal — it carries `moonPhase`, `discM` (0 when the moon is down) and
+    // `keyRamp` — and it is what the starlight floor fades against, so the floor
+    // is present exactly when this is not. Read here rather than off
+    // `this.moonLight.intensity`, which is clamped to a 0.03 renderer floor and
+    // so never actually reaches zero on a moonless night.
+    const moonGroundFill = moonI;
 
     // The renderer switches its own 4.3-intensity fallback sun back on if no
     // foreign directional light is brighter than 0.01. Keep a floor so that
@@ -1385,13 +1498,33 @@ export class SkySystem {
     this.skyglow = glow;
     const gh = SKYGLOW_HUE;
     this.skyglowColor.setRGB(gh[0] * glow, gh[1] * glow, gh[2] * glow);
-    // ADDED as its own coloured source rather than mixed into the hue: the moon
-    // and the city are two different illuminants with two different spectra, and
+
+    // ---- moon-independent starlight / skyglow ground floor -------------------
+    // See NIGHT_STARFLOOR_HUE. A cool, direction-less floor that keeps open
+    // terrain navigable when the moon has set or is new. Two gates, and the pair
+    // is the whole design:
+    //   duskRamp     night-only, IDENTICALLY zero for any disc-up frame, so no
+    //                daylight/golden-hour/dusk frame can move (proved by RMSE-0
+    //                day captures, like every other term here).
+    //   1-moonPresence  makes it a FLOOR, not an add: `moonGroundFill` is the
+    //                moon's own ground contribution (0 when the moon is down or
+    //                new), so a bright moonlit night gets none of this and cannot
+    //                be over-brightened, while a moonless one gets all of it.
+    // The knee is 0.10 rather than the exposure path's 0.12 so the floor has
+    // fully handed over to the moon before the moon becomes the cascade key.
+    const moonPresence = THREE.MathUtils.clamp(moonGroundFill / 0.10, 0, 1);
+    const starFloor = this.debugNoNightFloor
+      ? 0
+      : nf.starFloor * duskRamp * (1 - moonPresence);
+    this.starFloor = starFloor;
+    const sfh = NIGHT_STARFLOOR_HUE;
+    // ADDED as its own coloured source rather than mixed into the hue: the moon,
+    // the city and the starlit sky are three illuminants with three spectra, and
     // lerping between their hues loses the level of whichever one is smaller.
     this.ambientColor.setRGB(
-      ar * aLevel + gh[0] * glow,
-      ag * aLevel + gh[1] * glow,
-      ab * aLevel + gh[2] * glow
+      ar * aLevel + gh[0] * glow + sfh[0] * starFloor,
+      ag * aLevel + gh[1] * glow + sfh[1] * starFloor,
+      ab * aLevel + gh[2] * glow + sfh[2] * starFloor
     );
 
     // ---- sky shoulder -------------------------------------------------------
