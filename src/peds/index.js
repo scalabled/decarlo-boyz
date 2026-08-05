@@ -129,7 +129,7 @@ import { RIG } from './rig.js';
 import { PedMaterials, MATERIAL_SLOTS } from './materials.js';
 import { buildOutfit } from './builder.js';
 import { SHAPE_IDS, SHAPES, makeOutfit, densityAt, archetypeAt } from './wardrobe.js';
-import { SidewalkNet, Wander, CrowdGrid } from './nav.js';
+import { SidewalkNet, Wander, CrowdGrid, airfieldSpawnBlocked } from './nav.js';
 import { Ped, STATE } from './ped.js';
 import { GroundShadows, FarCrowd, PropPool } from './crowdfx.js';
 import { Crew, CREW_MAX } from './crew.js';
@@ -217,6 +217,14 @@ export class PedSystem {
     }
     this.far = new FarCrowd(this.root, this.budget + CREW_MAX + HOSTILE_MAX, this._farMaterial());
     this.props = new PropPool(this.root, Math.max(8, this.maxBodies), this._propMaterials());
+
+    /**
+     * Live negative-control hatch for the airfield keep-out (the
+     * `debugIgnorePause` pattern). When true, `_spawnNear` stops excluding the
+     * runway/apron/field and the perimeter ring — ambient peds flood the
+     * airport again. Flipped by `src/peds/airpedprobe.mjs`; never set in play.
+     */
+    this.debugIgnoreAirfields = false;
 
     /* ---- the crew: two brothers, their own pool, never streamed ---- */
     this.crew = new Crew(this);
@@ -587,6 +595,16 @@ export class PedSystem {
       if (sf === 'water') return null;
       if (!link && sf === 'asphalt') return null;
     }
+    /**
+     * AIRFIELD / AIRBASE keep-out. An airfield is open, restricted ground: no
+     * ambient pedestrian on the runway/apron/field, and only a sparse few on
+     * the perimeter ring road `netgen` diverts round each field — otherwise
+     * the ring's city sidewalks encircle the airport with a crowd. See
+     * `airfieldSpawnBlocked` in `nav.js`. Assault guards go through
+     * `spawnHostile`, a different path, and are untouched. `debugIgnoreAirfields`
+     * is the live negative-control hatch (`src/peds/airpedprobe.mjs`).
+     */
+    if (!this.debugIgnoreAirfields && airfieldSpawnBlocked(w, pos.x, pos.z, rng)) return null;
     const y = this.groundAt(pos.x, pos.z, anchor.y + 30, this._ground);
     if (!Number.isFinite(y) || y < -400) return null;
     if (this._ground.surface === 'water') return null;

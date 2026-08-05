@@ -327,3 +327,73 @@ export class CrowdGrid {
 }
 
 export { INSET as SIDEWALK_INSET };
+
+/* ---------------------------------------------------------- airfield --- */
+
+/**
+ * AMBIENT-SPAWN KEEP-OUT for airfields and the airbase.
+ *
+ * An airfield (the two civilian ones and Ridgeline AFB) is open, RESTRICTED
+ * ground: no wandering pedestrian belongs on the runway, apron or the graded
+ * field inside the fence, and — the part that surprises — the perimeter RING
+ * ROAD that `world` lays round each field must not carry city-sidewalk crowd
+ * density either. `netgen` (commit ee63000) diverts the city streets that used
+ * to cross each civilian field into a ring road hugging the fence; a ring road
+ * carries pavement, and pavement carries ambient peds, so without this the
+ * whole airport ends up encircled by a dense band of pedestrians — the "NPCs
+ * all over the airfield / too many people running around" report.
+ *
+ * `world.airfieldAt(x,z)` / `world.airbaseAt(x,z)` are the published FIELD
+ * predicates: truthy inside the fence, falsy under `?noairfield=1` /
+ * `?noairbase=1` (and before the pads are built). We consult ONLY those, so
+ * this stays in lock-step with `world`'s field geometry for free and touches
+ * nothing `peds` does not own.
+ *
+ *   - inside a field  -> reject the spawn outright (open ground, no crowd);
+ *   - on the perimeter (a field edge within `AF_PERIMETER` of the point, i.e.
+ *     on the ring road round the fence) -> keep only `AF_PERIMETER_KEEP` of
+ *     spawns, so the ring reads as a quiet airport fence line, not a high
+ *     street.
+ *
+ * This does NOT touch the assault guards (`peds.spawnHostile` / the hostiles
+ * pool) — those are gameplay actors intentionally placed when the player
+ * trespasses, on a different path entirely. Only the AMBIENT wander crowd is
+ * gated here.
+ *
+ * `rng` is a `core/rng.js` instance (`ctx.rng` in the game, a seeded `Rng` in
+ * the probe) — the perimeter coin flip is drawn from it, so the decision is
+ * deterministic (hard rule 4) and only draws when a field is actually near, so
+ * the rng stream — and therefore downtown density — is untouched away from a
+ * field. `src/peds/airpedprobe.mjs` gates this; `peds.debugIgnoreAirfields`
+ * is its live negative-control hatch (the `debugIgnorePause` pattern).
+ */
+export const AF_PERIMETER = 34;      // metres of ring band round a field
+export const AF_PERIMETER_KEEP = 0.12; // fraction of perimeter spawns kept
+
+// Eight unit compass offsets (N, NE, E, ... NW), flat, module-level so the
+// probe below allocates nothing per spawn (hard rule 5).
+const R2 = Math.SQRT1_2;
+const AF_RING = [
+  0, 1, R2, R2, 1, 0, R2, -R2,
+  0, -1, -R2, -R2, -1, 0, -R2, R2,
+];
+
+function fieldAt(world, x, z) {
+  return (world.airfieldAt && world.airfieldAt(x, z)) ||
+    (world.airbaseAt && world.airbaseAt(x, z)) || null;
+}
+
+/**
+ * True when an ambient pedestrian must NOT spawn at (x, z): inside a field, or
+ * a sparse rejection on the perimeter ring. See the block comment above.
+ */
+export function airfieldSpawnBlocked(world, x, z, rng) {
+  if (!world) return false;
+  if (fieldAt(world, x, z)) return true;
+  for (let i = 0; i < AF_RING.length; i += 2) {
+    if (fieldAt(world, x + AF_RING[i] * AF_PERIMETER, z + AF_RING[i + 1] * AF_PERIMETER)) {
+      return (rng ? rng.float() : 0) > AF_PERIMETER_KEEP;
+    }
+  }
+  return false;
+}
