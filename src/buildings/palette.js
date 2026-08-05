@@ -114,6 +114,22 @@ export const SURFACES = {
     wearColor: 0x6b6a60,
     wearMaterial: [0.42, 1.0, 0, 0.6],
   }),
+  /**
+   * Ridgeline AFB. Olive-drab painted steel for hangar skins and doors, a
+   * cold service grey for bunker concrete, and chromate warning yellow for
+   * the gate furniture and fence signage. Drab on purpose: the base must
+   * read military from the far side of the valley.
+   */
+  mil_drab: V('metal_painted', {
+    ...M,
+    scale: 1.2,
+    tint: 0x4c5743,
+    wear: [0.42, 0.75, 0.5, 0],
+    wearColor: 0x5f5c50,
+    wearMaterial: [0.42, 1.0, 0, 0.6],
+  }),
+  mil_concrete: V('concrete', { ...M, scale: 2.4, tint: 0x848780, weather: [0.44, 0.46, 0.58, 0.5] }),
+  hazard_yellow: PAINT(0xb3922e, 0.9),
   alu_bright: V('metal_brushed', { ...M, scale: 0.7, tint: 0x9aa0a6, roughness: [1.0, 0.06, 0.22] }),
   alu_dark: V('metal_brushed', { ...M, scale: 0.7, tint: 0x4a5058, roughness: [1.0, 0.1, 0.3] }),
   rust: V('metal_rust', { ...M, scale: 1.2 }),
@@ -417,6 +433,9 @@ export const SURFACE_TAG = {
   steel_dark: 'metal',
   steel_light: 'metal',
   steel_green: 'metal',
+  mil_drab: 'metal',
+  mil_concrete: 'concrete',
+  hazard_yellow: 'metal',
   alu_bright: 'metal',
   alu_dark: 'metal',
   rust: 'metal',

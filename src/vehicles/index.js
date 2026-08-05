@@ -22,6 +22,8 @@
  *   setDriver(vehicle, actor, seat)   / clearDriver(vehicle)
  *   damage(vehicle, amount, point)    external damage (bullets, explosions)
  *   telemetry(vehicle)                speed / slip / loads, for tools + HUD
+ *   aimTurret(vehicle, worldPoint)    slew the tank's turret (bounded rate)
+ *   fireShell(vehicle, target?)       fire the main gun; null while reloading
  *   prewarmMaterials(ctx)
  *
  * A Vehicle exposes: position, quaternion, velocity, speed, forwardSpeed,
@@ -115,6 +117,7 @@ import { Vehicle } from './dynamics.js';
 import { DamageModel } from './damage.js';
 import { VehicleGroundShadows } from './groundshadow.js';
 import { TramService } from './tram.js';
+import { stepTurret, stepShells, aimTurret, fireShell } from './tank.js';
 
 const LOD_DIST = [22, 52, 130];
 /** How far a door swings at `open = 1`, radians. 62 degrees. */
@@ -458,6 +461,8 @@ export class VehicleSystem {
     this._engineTimer = 0;
     this._debugSpawned = [];
     this._stats = { count: 0, lod: [0, 0, 0, 0], stepMs: 0 };
+    /** The pause-gate probe switch — the same pattern as `freeroam`/`weapons`. */
+    this.debugIgnorePause = false;
 
     this._buildHeadlightPool(ctx);
 
@@ -974,6 +979,14 @@ export class VehicleSystem {
       /** Water, for the drowning warning. */
       submerged: +(v.submerged ?? 0).toFixed(3),
       drowned: !!v.drowned,
+      /**
+       * The tank's main gun, 0..1 of reload complete (1 = ready to fire).
+       * `undefined` on everything without a turret so `ui` can gate a reload
+       * arc on presence, the way `noFuel` gates the fuel gauge.
+       */
+      gun: v.spec.turret
+        ? +(1 - Math.min(1, (v.gunCool ?? 0) / v.spec.turret.reload)).toFixed(3)
+        : undefined,
     };
   }
 
@@ -1425,6 +1438,15 @@ export class VehicleSystem {
     for (let i = 0; i < list.length; i++) {
       const v = list[i];
       /**
+       * THE TURRET SLEWS EVEN WHILE THE HULL SLEEPS. An AI emplacement is a
+       * parked tank — asleep by the solver's definition within 1.2 s — and a
+       * turret gated behind `fixedStep` would freeze mid-traverse the moment
+       * the hull settled. Slewing is kinematic state, not a force, so it runs
+       * here, above the sleep gate, like `DamageModel.update` runs in the
+       * frame loop. Also ticks the ~4 s reload clock. See `tank.js`.
+       */
+      if (v.spec.turret) stepTurret(v, h);
+      /**
        * KINEMATIC stock (the tram) is posed by its service from `update()` and
        * must never be integrated: its trajectory IS the rail, and one
        * `fixedStep` would hand it to the tyre model and gravity. It still sits
@@ -1469,6 +1491,9 @@ export class VehicleSystem {
         for (const w of pa.v.wheels) w.omega = pa.roll / (w.hp.radius || 0.34);
       }
     }
+    // Live tank shells: ballistic points that detonate through the canonical
+    // `explosion` event — the Scrap Rocket's own vocabulary. See `tank.js`.
+    stepShells(this, h);
     this._stats.stepMs = performance.now() - t0;
   }
 
@@ -1734,6 +1759,7 @@ export class VehicleSystem {
     if (this._hideZone) this._applyHideZone();
     this._restageWhenStreamed();
     this._pollHorn(ctx);
+    this._pollMainGun(ctx);
 
     // Engine telemetry for audio / UI, at 30 Hz.
     this._engineTimer += dt;
@@ -1776,6 +1802,64 @@ export class VehicleSystem {
     if (!input || input.frozen || input.enabled === false) return;
     this._hornVehicle = v;
     this.setHorn(v, !!input.action?.('horn'));
+  }
+
+  /**
+   * THE PLAYER'S TRIGGER, while driving the tank.
+   *
+   * There is no dedicated mounted-weapon input in this game — the drive-by
+   * path (`weapons/index.js`) fires the HANDHELD weapon off `input.fire` from
+   * inside any vehicle — so the main gun reads the same fire control: the
+   * turret tracks the chase camera's look point every frame and
+   * `input.firePressed` (an edge, so holding the button does not queue shots
+   * against the 4 s reload) fires the shell. AI emplacements never come
+   * through here; the encounter director drives `aimTurret`/`fireShell`
+   * directly.
+   *
+   * Pause contract, all four gates (ARCHITECTURE.md): `ui` reached by peek
+   * and duck-typed, the READ gated (not just the effect), `frozen`/`enabled`
+   * honoured for the capture harness, and `debugIgnorePause` so a probe can
+   * run the negative control against live code.
+   *
+   * REPORTED, not edited (rule 1): while driving the tank the drive-by path
+   * will ALSO fire the handheld weapon on the same click. `weapons` can see
+   * the turret through `player.vehicle.spec.turret` and should holster there
+   * the way it already does for melee in a car.
+   */
+  _pollMainGun(ctx) {
+    const v = this._playerVehicle();
+    if (!v?.spec?.turret || v.destroyed || !this.vehicles.includes(v)) return;
+    const input = ctx.input;
+    if (!input || input.frozen || input.enabled === false) return;
+    if (!this.debugIgnorePause && ctx.peek('ui')?.isPaused?.() === true) return;
+    ctx.camera.getWorldPosition(_v);
+    ctx.camera.getWorldDirection(_v2);
+    _v3.copy(_v).addScaledVector(_v2, 85);
+    aimTurret(v, _v3);
+    if (input.firePressed) fireShell(this, v);
+  }
+
+  /* ================================================================== */
+  /* Turret / main gun — public API (the encounter director's door)     */
+  /* ================================================================== */
+
+  /**
+   * Slew `v`'s turret toward a WORLD point at the bounded rates in its spec.
+   * False on anything without a turret. Also available as `v.aimTurret(p)`.
+   */
+  aimTurret(v, worldPoint) {
+    return aimTurret(v, worldPoint);
+  }
+
+  /**
+   * Fire `v`'s main gun along the barrel's CURRENT emitted direction.
+   * Returns the live shell, or null while the reload runs. `target`
+   * optionally re-commands the turret in the same call. Detonation goes out
+   * as the canonical `explosion` event — the same one the Scrap Rocket emits,
+   * into the same listeners. Also available as `v.fireShell(target)`.
+   */
+  fireShell(v, target = null) {
+    return fireShell(this, v, target);
   }
 
   /* ================================================================== */

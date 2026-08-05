@@ -51,6 +51,8 @@ import { buildInterior, buildBoatInterior } from './interior.js';
 import { buildBoatHull } from './boat.js';
 import { buildHeliBody } from './heli.js';
 import { buildPlaneBody } from './plane.js';
+import { buildJetBody } from './jet.js';
+import { buildTankBody } from './tank.js';
 import { buildTramBody } from './tram.js';
 import { mergeAll, transform, triCount, bakeBoxUV, bakePolarUV } from './geom.js';
 
@@ -65,6 +67,8 @@ export function clearGeometryCache() {
     for (const k in entry.wheel) disposeList(entry.wheel[k]);
     for (const d of entry.doors ?? []) d.geo?.dispose?.();
     for (const r of entry.rotors ?? []) r.geo?.dispose?.();
+    entry.turret?.geo?.dispose?.();
+    entry.turret?.gun?.geo?.dispose?.();
   }
   GEO_CACHE.clear();
 }
@@ -87,7 +91,12 @@ function geometryFor(spec, lod) {
   if (spec.kind === 'bike') body = buildBikeChassis(spec, lod);
   else if (spec.kind === 'boat') body = buildBoatHull(spec, lod);
   else if (spec.kind === 'heli') body = buildHeliBody(spec, lod);
-  else if (spec.kind === 'plane') body = buildPlaneBody(spec, lod);
+  // Two airframes ride `kind: 'plane'` — the shape picks the builder, the
+  // kind picks the flight model, so the jet flies `stepPlane` in a fighter's
+  // metal without a third dynamics branch.
+  else if (spec.kind === 'plane') {
+    body = spec.style.shape === 'jet' ? buildJetBody(spec, lod) : buildPlaneBody(spec, lod);
+  } else if (spec.kind === 'tank') body = buildTankBody(spec, lod);
   else if (spec.kind === 'tram') body = buildTramBody(spec, lod);
   else body = buildCarBody(spec, lod);
 
@@ -98,7 +107,7 @@ function geometryFor(spec, lod) {
   const interior =
     spec.kind === 'boat' ? buildBoatInterior(spec, lod)
       : spec.kind === 'bike' || spec.kind === 'heli' || spec.kind === 'plane' ||
-        spec.kind === 'tram'
+        spec.kind === 'tram' || spec.kind === 'tank'
         ? { seat: [], leather: [], dash: [], trim: [], chrome: [], cavity: [] }
         : buildInterior(spec, lod);
 
@@ -209,9 +218,10 @@ function geometryFor(spec, lod) {
   if (merged.cavity.attributes?.position) bakeBoxUV(merged.cavity);
 
   // The tram's rail wheels are part of the body (tram.js builds them into the
-  // bogies), so it takes no road-wheel chain either.
+  // bogies), so it takes no road-wheel chain either. Nor does the tank: its
+  // road wheels live under the skirts, built by `buildTankBody` into `trim`.
   const wheelGeo = spec.kind === 'boat' || spec.kind === 'heli' ||
-    spec.kind === 'plane' || spec.kind === 'tram'
+    spec.kind === 'plane' || spec.kind === 'tram' || spec.kind === 'tank'
     ? null : buildWheelGeo(spec, lod);
 
   // Doors are their own meshes — they have to move independently — and are
@@ -239,8 +249,23 @@ function geometryFor(spec, lod) {
     })
     : [];
 
+  /**
+   * The tank's turret. Same treatment as a rotor — merged into nothing, so it
+   * can traverse — but TWO nested pivots (ring, then trunnion), and kept at
+   * EVERY LOD: a turret welded straight ahead past 130 m would visibly snap
+   * back the moment an emplacement tracking the player crossed the boundary.
+   */
+  let turret = null;
+  if (body.turret) {
+    bakeBoxUV(body.turret.geo);
+    bakeGrime(body.turret.geo, spec, 0.6);
+    bakeWear(body.turret.geo, spec, 0.6);
+    bakeBoxUV(body.turret.gun.geo);
+    turret = body.turret;
+  }
+
   e = {
-    body: merged, wheel: wheelGeo, doors, rotors,
+    body: merged, wheel: wheelGeo, doors, rotors, turret,
     anchors: body.anchors ?? {}, surface: body.surface ?? null,
   };
   GEO_CACHE.set(key, e);
@@ -494,6 +519,8 @@ export function buildVehicleModel(spec, mats, opts = {}) {
   const doors = [];
   /** Rotor pivots — the helicopter's, and nothing else's. */
   const rotors = [];
+  /** Turret pivots — the tank's. `{ pivot, gun, lod }` per materialised LOD. */
+  const turrets = [];
   // Anchors are read off the cached LOD0 geometry, which costs nothing to look
   // up; LOD0's meshes are NOT built just to get them.
   const anchors = geometryFor(spec, 0).anchors;
@@ -574,6 +601,35 @@ export function buildVehicleModel(spec, mats, opts = {}) {
       pivot.add(m);
       g.add(pivot);
       rotors.push({ pivot, mesh: m, axis: r.axis, lod });
+    }
+
+    // ---- turret ----------------------------------------------------------
+    // Two nested pivots: the ring traverses about y, the gun elevates about x
+    // at the trunnion inside it. `Vehicle.syncTransforms` drives both off
+    // `turretYaw`/`gunPitch`, per LOD, exactly like the rotors above.
+    if (e.turret) {
+      const t = e.turret;
+      const ring = new THREE.Group();
+      ring.name = 'turretRing';
+      ring.position.set(t.pos[0], t.pos[1], t.pos[2]);
+      // Deliberately NOT in `panels`: `DamageModel.dent` displaces vertices in
+      // BODY space, and this mesh lives inside a rotating pivot — a dent
+      // stamped while the turret was traversed would land on the wrong face.
+      // Forty-five tonnes of armour not showing small-arms dents is correct.
+      const shell = new THREE.Mesh(t.geo, paintMat);
+      shell.name = 'turret';
+      shell.matrixAutoUpdate = false;
+      shell.updateMatrix();
+      ring.add(shell);
+      const trunnion = new THREE.Group();
+      trunnion.name = 'gunTrunnion';
+      trunnion.position.set(t.gun.pos[0], t.gun.pos[1], t.gun.pos[2]);
+      const barrel = new THREE.Mesh(t.gun.geo, mats.trim('dark'));
+      barrel.name = 'gun';
+      trunnion.add(barrel);
+      ring.add(trunnion);
+      g.add(ring);
+      turrets.push({ pivot: ring, gun: trunnion, mesh: shell, lod });
     }
 
     if (lod >= 2) for (const c of g.children) c.userData.owNoShadow = lod === 3;
@@ -662,7 +718,7 @@ export function buildVehicleModel(spec, mats, opts = {}) {
 
   const model = {
     root, bodyRoot, lodGroups, wheels, lampMats, paintMat, panels, glassMeshes,
-    doors, rotors, bounds, anchors, buildBodyLod, lod: -1,
+    doors, rotors, turrets, bounds, anchors, buildBodyLod, lod: -1,
   };
   // Nothing is materialised yet. `setVehicleLod` builds the first level the
   // moment the LOD selector picks one, which is on the vehicle's first update.
@@ -749,6 +805,10 @@ export function modelStats(spec) {
   }
   for (const d of e0.doors ?? []) { lod0 += safeTris(d.geo); tris += safeTris(d.geo); }
   for (const r of e0.rotors ?? []) { lod0 += safeTris(r.geo); tris += safeTris(r.geo); }
+  if (e0.turret) {
+    const t = safeTris(e0.turret.geo) + safeTris(e0.turret.gun.geo);
+    lod0 += t; tris += t;
+  }
   if (e0.wheel) lod0 += (safeTris(e0.wheel.rubber) + safeTris(e0.wheel.rim) + safeTris(e0.wheel.disc)) * 4;
   return { allLods: tris, lod0 };
 }

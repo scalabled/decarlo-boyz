@@ -71,10 +71,15 @@ const DT = 1 / 120;
  * stepped by the dynamics at all (`VehicleSystem.fixedUpdate` skips it), so
  * there is no drivetrain here to test; its gate is `npm run tram`
  * (src/vehicles/tramprobe.mjs), which asserts its emitted motion on the rail.
+ * The TANK rides the same wheel path but is deliberately everything these
+ * assertions call a defect in a car — 45 t, ~14 m/s flat out, a hull that
+ * refuses to roll — so it is excluded the same way and gated by `milprobe`
+ * (src/vehicles/milprobe.mjs) on the tracked claims instead.
  */
 const CAR_TYPES = Object.keys(VEHICLE_SPECS).filter(
   (k) => VEHICLE_SPECS[k].kind !== 'boat' && VEHICLE_SPECS[k].kind !== 'heli' &&
-    VEHICLE_SPECS[k].kind !== 'plane' && VEHICLE_SPECS[k].kind !== 'tram'
+    VEHICLE_SPECS[k].kind !== 'plane' && VEHICLE_SPECS[k].kind !== 'tram' &&
+    VEHICLE_SPECS[k].kind !== 'tank'
 );
 // `--type=heli` must still reach section 11 without being dragged through the
 // nine wheeled ones — filter the selection rather than trusting the caller.

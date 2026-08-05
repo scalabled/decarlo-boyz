@@ -149,6 +149,18 @@ export const AIRPORTS = [
   { id: 'ap_east', name: 'Rivers Field', x: 1032, z: -784, worldId: 'af_rivers' },
 ];
 
+/**
+ * The military airbase on the north-west rim. The coordinate is the MAIN
+ * GATE — the base is fenced, so a mission that routes here must arrive at
+ * the one place a car can drive in. The perimeter polygon, gates, runway
+ * heading and apron parking live on `world.airbase` (src/world/airbase.js),
+ * published by `world`; this entry only names the place and points the
+ * marker at it.
+ */
+export const MILITARY = [
+  { id: 'ab_ridge', name: 'Ridgeline AFB', x: -321, z: -1166, worldId: 'ab_ridge', kind: 'military' },
+];
+
 export const LANDMARKS = [
   { id: 'lm_point', name: 'The Point Fountain', x: -452, z: 46 },
   { id: 'lm_incline', name: 'Duquesne Incline', x: -488, z: 296 },
@@ -171,7 +183,7 @@ export const SHOPS_BY_KIND = {
 
 /** Every id a mission's `dest` field may name. Built once, read every mission. */
 export const POI = new Map();
-for (const list of [GAS_STATIONS, SAFEHOUSES, SHOPS, DOCKS, AIRPORTS, LANDMARKS]) {
+for (const list of [GAS_STATIONS, SAFEHOUSES, SHOPS, DOCKS, AIRPORTS, MILITARY, LANDMARKS]) {
   for (const p of list) POI.set(p.id, p);
 }
 

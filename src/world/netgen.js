@@ -6,6 +6,9 @@ import {
   nearestSiteDist,
 } from './plan.js';
 import { gradeAirfields, airfieldAt, levelAirfieldRoads } from './airfield.js';
+import {
+  gradeAirbase, airbaseAt, levelAirbaseRoads, reserveAirbase, airbaseAccessCorridors,
+} from './airbase.js';
 
 /**
  * WORLD — city layout generation.
@@ -820,6 +823,13 @@ export function generateCity(terrain, rng) {
   // city. See `src/world/airfield.js`.
   const airfieldGrade = gradeAirfields(terrain);
 
+  /* ---- 0c. bench the military airbase --------------------------------- */
+  // Same moment and same reason as 0b: the base road must solve its node
+  // heights against the bench. The site was surveyed to hold zero existing
+  // corridors, so unlike the strips the fence may close (see
+  // `src/world/airbase.js`); `?noairbase=1` / OW_NO_AIRBASE=1 is the hatch.
+  const airbaseGrade = gradeAirbase(terrain);
+
   /* ---- 1. river banks: the long arterials that define the waterfront ---- */
   for (const riv of RIVERS) {
     const hw = riv.width / 2;
@@ -922,8 +932,17 @@ export function generateCity(terrain, rng) {
   const reserved = lr.corridors;
   for (const c of landmarkRings(terrain)) reserved.push(c);
 
+  /* ---- 7c2. the airbase: perimeter reserve + the welded base road ------- */
+  // Cut anything inside the fence line (zero on the surveyed map — a guard),
+  // then lay the one public road in: it runs from the main gate deep into
+  // the Manchester/North Shore grid so `buildGraph` welds it at real street
+  // crossings, the same guarantee the bridge approaches use.
+  const abr = reserveAirbase(reserved);
+  const withBase = abr.corridors;
+  if (airbaseGrade.on) for (const c of airbaseAccessCorridors()) withBase.push(c);
+
   /* ---- 7d. one piece of ground, one road ------------------------------- */
-  const dd = dedupeCorridors(reserved, terrain);
+  const dd = dedupeCorridors(withBase, terrain);
 
   /* ---- 8. solve the planar graph --------------------------------------- */
   const graph = buildGraph(dd.corridors, terrain);
@@ -934,6 +953,7 @@ export function generateCity(terrain, rng) {
   // Before `rasteriseRoads`, so the corridor field, the terrain sink, the
   // road mesh and the corridor floor all inherit the level crossing.
   if (airfieldGrade.on) levelAirfieldRoads(graph);
+  if (airbaseGrade.on) levelAirbaseRoads(graph);
 
   /* ---- 9. corridor height field the terrain is flattened against -------- */
   const { field, weight } = rasteriseRoads(graph, terrain);
@@ -964,11 +984,11 @@ export function generateCity(terrain, rng) {
     if (wet) continue;
     // An airfield is open ground: no rowhouse block on the bench. Corner
     // check as well as centre — a block can straddle the field boundary.
-    if (airfieldGrade.on) {
-      let onField = !!airfieldAt(b.cx, b.cz);
+    if (airfieldGrade.on || airbaseGrade.on) {
+      let onField = !!airfieldAt(b.cx, b.cz) || !!airbaseAt(b.cx, b.cz);
       if (!onField) {
         for (const p of b.poly) {
-          if (airfieldAt(p[0], p[1])) {
+          if (airfieldAt(p[0], p[1]) || airbaseAt(p[0], p[1])) {
             onField = true;
             break;
           }

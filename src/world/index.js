@@ -13,6 +13,10 @@ import { RoadMeshBuilder, noGapFix } from './roadmesh.js';
 import { Water } from './water.js';
 import { buildBridges } from './bridges.js';
 import { buildAirfieldPaving, airfieldPavedAt, airfieldDeckAt } from './airfield.js';
+import {
+  buildAirbasePaving, airbasePavedAt, airbaseDeckAt, finaliseAirbase,
+} from './airbase.js';
+import { AIRBASE } from './plan.js';
 import { JobQueue, RingTracker } from './streaming.js';
 import { publishInclineTracks } from './incline.js';
 
@@ -385,6 +389,30 @@ export class WorldSystem {
       this._airfields.push(built);
     }
 
+    /* ---- 5c. Ridgeline AFB: paving + collision, never streamed ---------- */
+    // The military airbase's ground half, same contract as 5b — bench went in
+    // at `netgen` step 0c, this is the emitted paving and its 'asphalt'
+    // collision sheet. The structures (hangars, tower, radar, fence) are
+    // `buildings`' half, off the layout PUBLISHED here on `world.airbase`.
+    // Gated by `src/world/basesweep.mjs`; `?noairbase=1` is the hatch.
+    {
+      const built = buildAirbasePaving(AIRBASE, {
+        terrain: this.terrain,
+        roads: this.roads,
+        mat: (k) => this.roadMesh._mat(k),
+      });
+      if (built) {
+        this.root.add(built.group);
+        if (built.colMesh && physics) {
+          this.root.add(built.colMesh);
+          const h = physics.addStatic(built.colMesh, 'asphalt');
+          if (h >= 0) this._airfieldHandles.push(h);
+          this._physDirty = true;
+        }
+        this._airfields.push(built);
+      }
+    }
+
     /* ---- 6. the far road network, so the city reads to the horizon ----- */
     this._queueFarSectors();
 
@@ -430,6 +458,16 @@ export class WorldSystem {
     this.rivers = RIVERS;
     this.bridges = BRIDGES;
     this.airfields = AIRFIELDS;
+    /**
+     * THE PUBLISHED AIRBASE — Ridgeline AFB. `finaliseAirbase` attaches the
+     * world-space perimeter polygon, gates (drivable gaps), runway start +
+     * heading for jet takeoffs, tagged apron parking slots (jet/tank/jeep),
+     * guard patrol waypoints and `insidePerimeter(x, z)`. When the
+     * `?noairbase=1` hatch is up, `airbase.pad` is null and every published
+     * field above is null — consumers must check `pad` first, exactly as
+     * they do for `world.airfields[i]`.
+     */
+    this.airbase = finaliseAirbase(AIRBASE) ?? AIRBASE;
     this.docks = DOCKS;
     this.safehouses = SAFEHOUSES;
 
@@ -993,7 +1031,7 @@ export class WorldSystem {
            * `airfieldDeckAt`). 2 cm below the deck keeps this sheet the
            * loser against the real paving everywhere a query starts above it.
            */
-          const deck = airfieldDeckAt(xx, zz);
+          const deck = airfieldDeckAt(xx, zz) ?? airbaseDeckAt(xx, zz);
           if (deck !== null && yy < deck - 0.02) yy = deck - 0.02;
           arr[k + 1] = yy;
           arr[k + 2] = zz;
@@ -1259,6 +1297,7 @@ export class WorldSystem {
     // Airfield pavement: runway, taxiways, apron. Checked after roads so a
     // street crossing the strip keeps its own surface at the crossing.
     if (airfieldPavedAt(x, z)) return 'asphalt';
+    if (airbasePavedAt(x, z)) return 'asphalt';
     if (this.isWater(x, z)) return 'water';
     const wd = this.terrain.waterDist(x, z);
     if (wd < 26) return 'sand';
@@ -1324,7 +1363,7 @@ export class WorldSystem {
     // the bench (see `airfieldDeckAt` for the burial this closes). A road
     // corridor crossing the strip still wins below — the crossing is the
     // road's ground, and both sit on the same bench.
-    const deck = airfieldDeckAt(x, z);
+    const deck = airfieldDeckAt(x, z) ?? airbaseDeckAt(x, z);
     const ne = this.roads.nearestEdge(x, z, 40, y);
     const e = ne.edge;
     if (!e || e.rail) return deck ?? t;

@@ -486,6 +486,22 @@ export const PALETTE = {
     surface: 'asphalt',
     opts: { uvMode: 'triplanar', scale: 1.1, tint: 0xd9d5c6 },
   },
+  /**
+   * Ridgeline AFB paving. Darker and colder than the civilian strips: the
+   * military pours fresh asphalt and grinds it grey, and the aprons are big
+   * drab concrete panels. Warning paint is faded chromate yellow.
+   */
+  runway_mil: { name: 'road_asphalt', surface: 'asphalt', opts: { tint: 0x5e5f5c } },
+  apron_mil: {
+    name: 'concrete',
+    surface: 'concrete',
+    opts: { uvMode: 'triplanar', scale: 2.6, tint: 0x7f827b, macroRelief: 0.4 },
+  },
+  mil_paint_yellow: {
+    name: 'concrete',
+    surface: 'asphalt',
+    opts: { uvMode: 'triplanar', scale: 1.1, tint: 0xc2a03a },
+  },
   /** Runway edge / threshold lamps. Small boxes; real radiance so they read. */
   runway_lamp: {
     name: 'plaster',

@@ -312,6 +312,38 @@ export const AIRFIELDS = [
   { id: 'af_rivers', name: 'Rivers Field', x: 1032, z: -784, runway: [512, 80], yaw: -0.42 },
 ];
 
+/**
+ * THE MILITARY AIRBASE — Ridgeline AFB, the biggest single site on the map.
+ *
+ * SITED BY SURVEY, NOT BY EYE (the coordinates were measured, 2026-08): a
+ * 199-candidate scan of every map-edge rectangle big enough for a 1200 m
+ * runway, scored on the real `Terrain` APIs (LS-fit centreline slope clamped
+ * to the same 2.2% the civilian benches use, worst cut/fill over the whole
+ * field, `waterDist`, `slopeAt`) and on the emitted road graph (edges whose
+ * endpoint lands inside the field). The winner is the high shelf on the
+ * north-west rim above Manchester: centreline fit -0.77% (inside the clamp),
+ * worst residual 8.2 m, nearest water 578 m, ZERO drivable and ZERO rail
+ * edges inside the field, 387 m clear of the nearest district circle,
+ * 1.9 km from the nearest civilian airfield. Takeoff run is +a (east):
+ * measured climb-out terrain past that end stays within 29 m of the bench,
+ * against 87 m the other way into the Manchester rim.
+ *
+ * `runway` is [length, PAVED width] — unlike the civilian entries, whose
+ * width is the whole strip. Everything else about the site (the L-shaped
+ * field, fence polygon, gates, apron, parking, patrol loop) lives in
+ * `src/world/airbase.js`, which is the one owner of every spatial fact here
+ * — same contract as `world.airfields[].layout`.
+ */
+export const AIRBASE = {
+  id: 'ab_ridge',
+  name: 'Ridgeline AFB',
+  kind: 'military',
+  x: -675,
+  z: -1390,
+  yaw: 1.67,
+  runway: [1200, 46],
+};
+
 export const DOCKS = [
   { id: 'dk_south', name: 'South Side Docks', x: -88, z: 280 },
   { id: 'dk_north', name: 'North Shore Slip', x: -24, z: -264 },

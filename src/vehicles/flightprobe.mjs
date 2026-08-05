@@ -70,6 +70,7 @@ import { Vehicle } from './dynamics.js';
 import { VehicleSystem } from './index.js';
 import { buildHeliBody } from './heli.js';
 import { buildPlaneBody } from './plane.js';
+import { buildJetBody } from './jet.js';
 
 const DT = 1 / 120;
 const DEG = 180 / Math.PI;
@@ -184,14 +185,14 @@ function sideslip(v) {
 function TAKEABLE(v) { return !!v && !v.destroyed && v.enterable !== false; }
 
 /** Every flyable class. The variants ride the same two kinds. */
-const AIRCRAFT = ['heli', 'newsheli', 'plane', 'sportplane'];
+const AIRCRAFT = ['heli', 'newsheli', 'plane', 'sportplane', 'jet'];
 
 function testEnter() {
   for (const [type, ap] of [
     ['heli', [-1072, 784]], ['plane', [1032, -784]],
     // The variants spawn from the cheat menu wherever the player is standing;
     // the coordinates are arbitrary open ground, which is exactly the claim.
-    ['newsheli', [220, -410]], ['sportplane', [-380, 96]],
+    ['newsheli', [220, -410]], ['sportplane', [-380, 96]], ['jet', [510, 120]],
   ]) {
     const v = spawn(type);
     v.position.set(ap[0], 0.6, ap[1]);
@@ -492,6 +493,146 @@ function testSportPlane() {
 }
 
 /* ================================================================== */
+/* 4b. THE FIGHTER — thrust regime, runway appetite, afterburner       */
+/* ================================================================== */
+/**
+ * The jet is `stepPlane`'s aircraft with hot numbers (see `specs.js` `jet`),
+ * so what is gated here is the REGIME GAP, all of it on emitted motion:
+ *
+ *   - it unsticks only after a runway-length ground roll at a speed no prop
+ *     in the fleet ever needs — the reason it lives on the 512-600 m military
+ *     strips (`world/plan.js AIRFIELDS`) and cannot operate off a street;
+ *   - the same seconds of the same input leave the sportplane an entire
+ *     speed regime behind;
+ *   - the AFTERBURNER measurably adds thrust: two arms flown identically to
+ *     the same firewalled lever, one holding SHIFT (burner lit) and one
+ *     releasing it (lever holds, burner out) — the only difference the specs
+ *     allow between the arms is the reheat, and the emitted speed gap is it;
+ *   - NEGATIVE CONTROLS: no throttle rolls nowhere, and the sportplane's
+ *     thrust numbers under the jet's airframe cannot make the speed margin —
+ *     they cannot even make it FLY — so the speed gate above is measuring
+ *     the thrust block, not the silhouette.
+ */
+/**
+ * Distance and airspeed at WHEELS-OFF: the first ground release that holds
+ * for half a second of steps (a bump that skips a wheel for one frame is not
+ * a take-off). Both raw emitted quantities.
+ */
+function rollStats(v, cap = 45) {
+  const x0 = v.position.x;
+  const z0 = v.position.z;
+  const n = Math.round(cap * 120);
+  let streak = 0;
+  let roll = null;
+  let unstickV = NaN;
+  for (let i = 0; i < n; i++) {
+    v.input.boost = 1;
+    v.input.throttle = 0;
+    v.input.brake = 0;
+    v.input.steer = 0;
+    v.input.handbrake = false;
+    v.fixedStep(DT, CTX);
+    if (v.grounded === 0) {
+      if (streak === 0) {
+        roll = Math.hypot(v.position.x - x0, v.position.z - z0);
+        unstickV = fwdSpeed(v);
+      }
+      if (++streak >= 60) return { roll, unstickV };
+    } else {
+      streak = 0;
+      roll = null;
+    }
+  }
+  return { roll: null, unstickV: NaN };
+}
+
+function testJet() {
+  /* ---- parked: settles on its gear and holds -------------------------- */
+  {
+    const v = spawn('jet');
+    const p0 = v.position.clone();
+    fly(v, {}, 3);
+    const drift = Math.hypot(v.position.x - p0.x, v.position.z - p0.z);
+    check('jet', 'parked, it settles on its gear and sits still',
+      v.grounded >= 3 && Math.abs(v.velocity.y) < 0.1 && v.altitude < 0.15 && drift < 0.2,
+      `grounded ${v.grounded}, vy ${v.velocity.y.toFixed(4)}, alt ${v.altitude.toFixed(3)}, drift ${drift.toFixed(3)} m`);
+  }
+
+  /* ---- the runway appetite ------------------------------------------- */
+  // MEASURED: jet wheels-off at ~321 m / 90 m/s against the sportplane's
+  // ~305 m / 50 m/s. The distances are close — the jet buys its speed with
+  // twelve times the thrust — so the LOAD-BEARING contrast is the unstick
+  // SPEED: nothing but the 512-600 m military strips gives it that run plus
+  // margin to stop, and no prop in the fleet needs anything like 90 m/s.
+  const jr = rollStats(spawn('jet'));
+  const sr = rollStats(spawn('sportplane'));
+  check('jet', 'takes off from a runway-length ground roll (fits the military strip)',
+    jr.roll !== null && jr.roll > 250 && jr.roll < 470,
+    `wheels-off after ${jr.roll?.toFixed(0)} m (military strips: 512/600 m)`);
+  check('jet', 'unsticks at fighter speed — a far higher stall than any prop',
+    sr.roll !== null && jr.unstickV > sr.unstickV + 25,
+    `${jr.unstickV.toFixed(1)} m/s vs sportplane ${sr.unstickV.toFixed(1)} m/s at wheels-up`);
+
+  /* ---- the speed regime, same seconds of the same input --------------- */
+  const j26 = spawn('jet');
+  fly(j26, { boost: 1 }, 26);
+  const vJet = fwdSpeed(j26);
+  const s26 = spawn('sportplane');
+  fly(s26, { boost: 1 }, 26);
+  const vSport = fwdSpeed(s26);
+  check('jet', 'out-runs the sportplane by a whole regime on the same input',
+    j26.grounded === 0 && j26.altitude > 40 && vJet > vSport + 40,
+    `${vJet.toFixed(1)} m/s at ${j26.altitude.toFixed(0)} m vs sportplane ${vSport.toFixed(1)} m/s`);
+
+  /* ---- afterburner: SHIFT held past the firewall vs released ---------- */
+  // Two arms flown IDENTICALLY for 8 s (the lever firewalls at 1.6 s), then
+  // 4 s with SHIFT held (burner lit) vs released (lever HOLDS at 1, burner
+  // out) — the specs allow no difference between the arms but the reheat.
+  // Measured in the climb-out where thrust dominates: at cruise the trimmed
+  // wing converts extra thrust to climb angle and the airspeed gap flattens
+  // to a couple of m/s, which is aerodynamics, not a missing burner.
+  // MEASURED: 127.1 vs 114.6 m/s.
+  {
+    const arm = (burn) => {
+      const v = spawn('jet');
+      fly(v, { boost: 1 }, 8);             // identical prefix, lever firewalled
+      fly(v, burn ? { boost: 1 } : {}, 4); // the ONLY difference: reheat
+      return fwdSpeed(v);
+    };
+    const lit = arm(true);
+    const dry = arm(false);
+    check('jet', 'afterburner measurably adds thrust (emitted speed, matched arms)',
+      lit > dry + 7,
+      `burner ${lit.toFixed(1)} m/s vs dry ${dry.toFixed(1)} m/s after the same 12 s`);
+  }
+
+  /* ---- NEGATIVE CONTROL: no throttle, no take-off --------------------- */
+  {
+    const v = spawn('jet');
+    fly(v, {}, 26);
+    check('jet', 'NEGATIVE CONTROL — no throttle, it never leaves the runway',
+      fwdSpeed(v) < 2 && v.altitude < 0.2 && v.grounded >= 3,
+      `airspeed ${fwdSpeed(v).toFixed(2)} m/s, altitude ${v.altitude.toFixed(3)} m, ${v.grounded} wheels down`);
+  }
+
+  /* ---- NEGATIVE CONTROL: sportplane thrust fails the margin ----------- */
+  {
+    const ctrl = spawnSpec(variantSpec('jet', (b) => {
+      b.flight = {
+        ...b.flight,
+        maxThrust: VEHICLE_SPECS.sportplane.flight.maxThrust,
+        propVmax: VEHICLE_SPECS.sportplane.flight.propVmax,
+        afterburner: null,
+      };
+    }));
+    fly(ctrl, { boost: 1 }, 26);
+    check('jet', 'NEGATIVE CONTROL — sportplane thrust under this airframe fails the speed margin',
+      fwdSpeed(ctrl) < vSport + 5 && ctrl.grounded >= 3 && ctrl.altitude < 0.5,
+      `control ${fwdSpeed(ctrl).toFixed(1)} m/s, altitude ${ctrl.altitude.toFixed(2)} m (the jet did ${vJet.toFixed(1)})`);
+  }
+}
+
+/* ================================================================== */
 /* 5. SILHOUETTES AND LIVERIES — the variants READ different          */
 /* ================================================================== */
 /**
@@ -576,6 +717,82 @@ function testSilhouettes() {
   check('silhouette', 'NEGATIVE CONTROL — with the Skylark wing height it reads high-wing',
     wC > fyS + 0.5, `control wing band y ${wC.toFixed(2)} vs centreline ${fyS.toFixed(2)}`);
 
+  /* ---- the fighter: twin tails, hard sweep, a nozzle ------------------ */
+  // All read off the emitted vertices, never the style block that asked.
+  const jetSpec = finalizeSpec(VEHICLE_SPECS.jet);
+  const jet = buildJetBody(jetSpec, 0);
+
+  /** Fin population in a tail band: verts up high, well aft. */
+  const tails = (out, yMin, zMax) => {
+    let port = 0;
+    let stbd = 0;
+    let centre = 0;
+    for (const geo of out.paint ?? []) {
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        if (p.getY(i) < yMin || p.getZ(i) > zMax) continue;
+        const x = p.getX(i);
+        if (x > 0.3) stbd++;
+        else if (x < -0.3) port++;
+        else if (Math.abs(x) < 0.15) centre++;
+      }
+    }
+    return { port, stbd, centre };
+  };
+  const jt = tails(jet, 2.6, -4.0);
+  const st2 = tails(sport, 2.0, -2.4);
+  check('silhouette', 'the jet carries TWIN tails, canted off the centreline',
+    jt.port > 8 && jt.stbd > 8 && jt.centre === 0,
+    `tail-band verts port ${jt.port} / stbd ${jt.stbd} / centre ${jt.centre}`);
+  check('silhouette', 'the sportplane keeps its single centre fin (the contrast)',
+    st2.centre > 8 && st2.port === 0 && st2.stbd === 0,
+    `port ${st2.port} / stbd ${st2.stbd} / centre ${st2.centre}`);
+  // NEGATIVE CONTROL: fold the fins onto the centreline and the twin-tail
+  // reading must vanish — the detector measures metal, not the class id.
+  const oneTail = tails(buildJetBody(variantSpec('jet', (b) => {
+    b.style.finX = 0;
+    b.style.finCant = 0;
+  }), 0), 2.6, -4.0);
+  check('silhouette', 'NEGATIVE CONTROL — fins folded to centre read single-tail',
+    oneTail.centre > 8 && oneTail.port === 0 && oneTail.stbd === 0,
+    `port ${oneTail.port} / stbd ${oneTail.stbd} / centre ${oneTail.centre}`);
+
+  /** Leading-edge sweep: emitted max z at the wing root band vs at the tip. */
+  const sweepOf = (out, spec2) => {
+    const half = spec2.style.wingSpan * 0.5;
+    const fuseHw = spec2.style.fuseR ?? 0.6;
+    let root = -Infinity;
+    let tip = -Infinity;
+    for (const geo of out.paint ?? []) {
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const ax = Math.abs(p.getX(i));
+        const z = p.getZ(i);
+        if (z < spec2.style.wingZ - spec2.style.wingChord) continue; // wings only, not stabs
+        if (ax > fuseHw + 0.25 && ax < fuseHw + 0.7 && z > root) root = z;
+        if (ax > half * 0.92 && z > tip) tip = z;
+      }
+    }
+    return root - tip;
+  };
+  const jSweep = sweepOf(jet, jetSpec);
+  const sSweep = sweepOf(sport, sportSpec);
+  check('silhouette', 'the delta wing is swept HARD against the sport plane\'s',
+    jSweep > sSweep + 1.0,
+    `leading edge falls back ${jSweep.toFixed(2)} m root->tip vs ${sSweep.toFixed(2)} m`);
+
+  // The reheat can: emitted metal aft of the fuselage, around the tail axis.
+  let nozzle = 0;
+  for (const geo of jet.trim ?? []) {
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      if (p.getZ(i) < jetSpec.style.fuseZ0 - 0.2 &&
+          Math.abs(p.getY(i) - jetSpec.style.fuseY) < 0.8) nozzle++;
+    }
+  }
+  check('silhouette', 'an afterburner nozzle hangs off the tail',
+    nozzle > 12, `${nozzle} emitted nozzle verts aft of the fuselage`);
+
   /**
    * LIVERIES. Each variant's paint pools resolve through the SAME `PAINTS`
    * table the spawner reads (`_choosePaint`: `spec.paints` -> `PAINTS[pool]`),
@@ -589,7 +806,7 @@ function testSilhouettes() {
     }
     return out;
   };
-  for (const [a, b] of [['heli', 'newsheli'], ['plane', 'sportplane']]) {
+  for (const [a, b] of [['heli', 'newsheli'], ['plane', 'sportplane'], ['sportplane', 'jet']]) {
     const ca = colours(a), cb = colours(b);
     const overlap = [...cb].filter((c) => ca.has(c));
     check('livery', `${b} resolves its own paint pool (${VEHICLE_SPECS[b].paints.join(',')})`,
@@ -606,6 +823,7 @@ testHeli();
 testPlane();
 testNewsHeli();
 testSportPlane();
+testJet();
 testSilhouettes();
 
 console.log(`\nflightprobe: ${pass}/${pass + fail} checks passed`);

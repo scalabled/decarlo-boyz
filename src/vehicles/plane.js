@@ -402,8 +402,37 @@ export function stepPlane(v, dt, ctx) {
   /* ---- 5. thrust ------------------------------------------------------ */
   // A fixed-pitch prop: static thrust is strong and falls toward zero as the
   // aircraft catches up to the pitch speed, so the top speed self-limits.
-  const thrust = lever * v.rotorSpin * F.maxThrust *
+  // (For the jet the same falloff stands in for intake/ram effects, with a
+  // `propVmax` far past the wing's placard speed.)
+  let thrust = lever * v.rotorSpin * F.maxThrust *
     clamp(1 - Math.max(0, along) / F.propVmax, 0.05, 1) * (v.hero?.plane ?? 1);
+
+  /**
+   * AFTERBURNER — the jet's `flight.afterburner` block; every prop aircraft
+   * simply has none. The LIGHT-OFF RULE: the burner lights only while the
+   * throttle lever is already FIREWALLED and SHIFT is still held — so the same
+   * key that winds the lever up becomes reheat once there is nothing left to
+   * wind, and releasing it drops the burner while the lever holds. That gives
+   * the keyboard a genuine two-stage throttle with no new binding.
+   *
+   * `v.afterburner` (0..1, its own spool) is PUBLISHED state: `fx` should
+   * scale the nozzle flame off it and `audio` the reheat roar — reported, not
+   * wired, since both live outside this directory. The reheat thrust carries
+   * its own, higher speed falloff (`ab.Vmax`), which is what makes the burner
+   * worth most exactly where the dry engine is running out.
+   */
+  const ab = F.afterburner;
+  if (ab) {
+    const lit = wantEngine && lever >= 0.995 && upT > 0.5;
+    const rate = dt / (ab.spool ?? 0.8);
+    v.afterburner = clamp((v.afterburner ?? 0) + (lit ? rate : -rate * 2), 0, 1);
+    if (v.afterburner > 0) {
+      thrust += ab.thrust * v.afterburner *
+        clamp(1 - Math.max(0, along) / (ab.Vmax ?? F.propVmax * 1.4), 0.08, 1);
+    }
+  } else if (v.afterburner) {
+    v.afterburner = 0;
+  }
   v.rotorThrust = thrust;
   v.propThrust = thrust;
   if (thrust > 0) {

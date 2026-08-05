@@ -119,6 +119,23 @@ export const PAINTS = {
     { name: 'pylon orange', color: 0xc4561a, f: 0.5, c: 1.0 },
   ],
   /**
+   * MILITARY POOLS — the tank and the fighter. Flat drab coats (low flake,
+   * low clearcoat — armour is painted with a broom, not lacquered), and the
+   * two pools are disjoint from each other and from every civilian pool, so a
+   * MILSPEC machine can never roll a taxi's colour. `milprobe`/`flightprobe`
+   * assert the disjointness the same way the aircraft pools are gated.
+   */
+  milarmor: [
+    { name: 'olive drab', color: 0x3f4531, f: 0.03, c: 0.10 },
+    { name: 'forest od', color: 0x33402c, f: 0.03, c: 0.10 },
+    { name: 'armor tan', color: 0x7a6f52, f: 0.03, c: 0.12 },
+  ],
+  milair: [
+    { name: 'gunship grey', color: 0x5c6166, f: 0.06, c: 0.25 },
+    { name: 'compass ghost', color: 0x8a9096, f: 0.06, c: 0.25 },
+    { name: 'strike drab', color: 0x4a5142, f: 0.05, c: 0.2 },
+  ],
+  /**
    * HERO POOLS — the three brothers' own cars, each a single believable
    * catalogue colour so the personal car reads the same every time you get in
    * it. They are hero-only classes (`kessel`, `pickup`, `suv` never appear in
@@ -2210,6 +2227,235 @@ export const VEHICLE_SPECS = {
       propZ: 3.24, propR: 0.88, propBlades: 3,
       headlight: { w: 0.11, h: 0.10, y: 1.0, inset: 0, kind: 'round' },
       taillight: { w: 0.07, h: 0.07, y: 2.28, inset: 0, kind: 'round' },
+    },
+  },
+
+  /* -------------------------------------------------------- tank ---- */
+  /**
+   * THE BULWARK — a tracked main battle tank. `kind: 'tank'` takes the CAR
+   * path of `Vehicle.fixedStep` (a hull on sprung contacts is a hull on
+   * sprung contacts) and reads TRACKED through the numbers:
+   *
+   *   - 45 t, geared to ~14 m/s: vGeared = redlineW * r / (top * final)
+   *     = 240.9 * 0.42 / 7.04 = 14.4 m/s. Slow is the character.
+   *   - track-pad grip (mu 2.3 on the truck carcass, loadSens 0.05): it does
+   *     not slide, it GOES where the sticks point, including a near-pivot at
+   *     walking pace (steer.max 0.62 on a 4.4 m wheelbase is a 6.5 m radius).
+   *   - near-critical damping + monster anti-roll: the hull stays FLAT.
+   *     Nothing about a corner should read as body roll.
+   *   - `body.hp 9000, crumple 0.06`: a Scrap Rocket at the epicentre is
+   *     200 * 2.5 * 4.0 = 2000 vehicle points — a fifth of this body, where
+   *     it writes off a 900-point sedan outright. And `DamageModel.impact`
+   *     prices collisions as `impulse / mass`, so 45 t shrugs a shunt that
+   *     cripples a car, and `_pairResolve`'s mass split means it shoves the
+   *     fleet aside rather than stopping.
+   *
+   * The TURRET (`turret` block) is the new machinery: `aimTurret(point)`
+   * slews `turretYaw`/`gunPitch` at the bounded rates below, `fireShell()`
+   * lobs a ballistic shell that detonates through the canonical `explosion`
+   * event — the Scrap Rocket's own vocabulary, same listeners, no parallel
+   * damage path. See `tank.js`; the gate is `milprobe.mjs`.
+   *
+   * NOT in `DISTRICT_MIX` (no ambient tank traffic); reaches the game through
+   * the cheat menu's CLASS_IDS enumeration and the encounter director.
+   */
+  tank: {
+    id: 'tank',
+    name: 'Bulwark',
+    kind: 'tank',
+    seats: 1,
+    doors: 0,
+    dims: { L: 7.8, W: 3.4, H: 2.3 },
+    mass: 45000,
+    /**
+     * LOW. The flat hull is GEOMETRY first: at comY 0.8 on a 2.7 m track the
+     * emitted bank in the hardest corner it holds is 2.65 deg at 7.7 m/s^2 —
+     * 0.34 deg per m/s^2 against the sedan's 1.06 at the same lateral
+     * acceleration. MEASURED (milprobe protocol), and the negative control is
+     * the same machine at a car's comY 1.5: it rolls over outright.
+     */
+    comY: 0.8,
+    comZ: 0.5,
+    /** Four hardpoints stand in for the road-wheel stations. */
+    wheelbase: 4.4,
+    trackF: 2.7, trackR: 2.7,
+    wheel: { radius: 0.42, width: 0.46, rimFrac: 0.5, spokes: 6, style: 'steel' },
+    drive: 'awd',
+    susp: {
+      travel: 0.22, rideHeight: 0.24,
+      /** Torsion-bar stiff, near-critically damped: it SETTLES, never bounces. */
+      freqF: 2.1, freqR: 2.1,
+      dampF: 0.75, dampR: 0.75,
+      reboundScale: 1.0,
+      /**
+       * Big but NOT bigger: 900k was measured UNSTABLE — the undamped
+       * cross-axle spring pumped the roll mode at the 120 Hz step until the
+       * hull did 40 m/s on two wheels. 550k with the stiff springs above is
+       * the measured optimum (2.65 deg); 700k already leans MORE (4.76).
+       */
+      arbF: 550000, arbR: 550000,
+      camberF: 0, camberR: 0, toeF: 0, toeR: 0,
+    },
+    /** Track pads: huge grip, nearly load-flat, no fade worth modelling. */
+    tyre: {
+      ...TYRE_TRUCK,
+      muLong: 2.3, muLat: 2.2,
+      loadSens: 0.05, relax: 0.30, fade: 0.05, rollRes: 0.030,
+    },
+    engine: {
+      // A 1.2 MW diesel at crawler revs. Audio wants slow, huge, hammering.
+      peakTorque: 5200, peakRpm: 1900, redline: 2300, idle: 650,
+      inertia: 2.4, friction: 0.2, brakeTorque: 400,
+    },
+    gearbox: {
+      gears: [-4.8, 0, 5.6, 3.3, 2.2],
+      final: 3.2, eff: 0.9,
+      shiftUp: 0.8, shiftDown: 0.42, shiftTime: 0.5,
+      autoClutchRpm: 900,
+    },
+    diff: { lock: 1, preload: 400 },
+    brakes: { front: 42000, rear: 42000, handbrake: 52000, bias: 0.5 },
+    /** Tight, speed-faded: pivot-y at walking pace, stable at its 14 m/s. */
+    steer: { max: 0.62, speedFalloff: 0.85, rate: 2.4, returnRate: 3.2, counterAssist: 0 },
+    aero: { cd: 1.1, area: 6.5, downF: 0, downR: 0, yawDrag: 10 },
+    body: { hp: 9000, crumple: 0.06 },
+    /**
+     * THE MAIN GUN. Rates are radians/s of slew — a commanded point is
+     * TRACKED, visibly, not snapped to. The shell speaks actor points
+     * (`damage`), converted once by `_explosionDamage` like every blast.
+     */
+    turret: {
+      yawRate: 0.9, pitchRate: 0.7,
+      pitchMin: -0.12, pitchMax: 0.35,
+      reload: 4.0,
+      shell: { speed: 105, damage: 210, radius: 7.5, life: 6 },
+      recoil: { kick: 0.8, pitch: 0.4, flash: 2.4 },
+    },
+    paints: ['milarmor'],
+    style: {
+      shape: 'tank',
+      groundY: 0.45,
+      roofY: 2.26,
+      hwMax: 1.70,
+      /** Seating fields for the generic `seatAnchor` path — commander's seat
+       *  under the hatch, head up in the turret band. */
+      sillY: 0.75, beltY: 1.62, cowlZ: 1.2,
+      /** Upper hull box (full width `w`), and the sloped glacis off its nose. */
+      hull: { y0: 0.45, y1: 1.50, z0: -3.55, z1: 2.55, w: 2.55 },
+      glacis: { z1: 3.85, drop: 0.95 },
+      /** Track skirts and the running gear under them, per side (x extents). */
+      skirt: { y0: 0.60, y1: 1.20, x0: 1.28, x1: 1.70, z0: -3.85, z1: 3.55 },
+      track: { y0: 0.16, y1: 1.00, x0: 1.24, x1: 1.66, wheelR: 0.42, wheels: 6 },
+      /** Traverse pivot on the deck; the shell/bustle build about it. */
+      turret: { x: 0, y: 1.50, z: 0.30, w: 2.30, h: 0.74, l: 3.0, bustle: 0.9 },
+      /** Trunnion relative to the traverse pivot; the barrel runs +z from it. */
+      gun: { y: 0.34, z: 1.25, len: 4.7, r: 0.085 },
+      headlight: { w: 0.09, h: 0.08, y: 1.28, inset: 0, kind: 'round' },
+      taillight: { w: 0.07, h: 0.06, y: 1.1, inset: 0, kind: 'round' },
+    },
+  },
+
+  /* --------------------------------------------------------- jet ---- */
+  /**
+   * THE TALON — a fighter. `kind: 'plane'`, so it is `stepPlane`'s aircraft
+   * in every particular; `style.shape: 'jet'` picks the fighter airframe in
+   * `build.js` (see `jet.js`). Against the Slipstream, the hot numbers:
+   *
+   *   - THRUST: 84 kN static vs 6.4 kN, `propVmax` 330 standing in for the
+   *     turbojet's shallow lapse. It out-accelerates and out-runs the sport
+   *     plane by an entire regime — `flightprobe` races them on identical
+   *     input and asserts the emitted gap.
+   *   - WING LOADING: 7.2 t on 26 m² (CLmax 1.35) stalls around 57 m/s and
+   *     will not unstick below ~85 — the long military runway is a REQUIREMENT
+   *     (measured ground roll ~370 m; af_county's strip is 600). The
+   *     Slipstream flies off in under 200.
+   *   - AFTERBURNER: hold SHIFT past the firewalled lever and `stepPlane`
+   *     lights `flight.afterburner` — +34 kN of reheat with its own speed
+   *     falloff, published as `v.afterburner` 0..1 for the nozzle flame.
+   *   - ROLL: `rollAuth 3.6` — a flick of aileron puts a wing vertical.
+   *
+   * Landing gear is the same tricycle contract (`makePlaneGear` reads the
+   * gear fields below), stiffened for the mass.
+   */
+  jet: {
+    id: 'jet',
+    name: 'Talon',
+    kind: 'plane',
+    seats: 1,
+    doors: 1,
+    dims: { L: 14.5, W: 9.6, H: 3.5 },
+    mass: 7200,
+    comY: 1.35,
+    comZ: 0.5,
+    /** No real axles; present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 5.2,
+    trackF: 3.2, trackR: 3.2,
+    wheel: { radius: 0.30, width: 0.16, rimFrac: 0.55, spokes: 5, style: 'steel' },
+    drive: 'fwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // Governor/audio profile only; the flight block owns the thrust.
+      peakTorque: 900, peakRpm: 3000, redline: 3400, idle: 900,
+      inertia: 1.0, friction: 0.1, brakeTorque: 40,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    /** `plane.js` owns the real drag; the airframe is clean. */
+    aero: { cd: 0.012, area: 1.3, downF: 0, downR: 0, yawDrag: 2.2 },
+    body: { hp: 900, crumple: 1.2 },
+    /** Fixed-wing parameters — consumed only by `plane.js`. */
+    flight: {
+      /** Turbojet: 84 kN dry, lapsing shallowly toward 330 m/s. */
+      maxThrust: 84000, propVmax: 330,
+      throttleRate: 1.6, propSpool: 2.6,
+      /** The heavily-loaded delta: high flying speed, high stall speed. */
+      wingArea: 26.0, CL0: 0.30, CLalpha: 5.0, aoaStall: 0.34, CLmax: 1.35,
+      aoaTrim: 0.06,
+      span: 9.6, oswald: 0.7, CD0: 0.021,
+      Vref: 85,
+      pitchElev: 1.35, pitchStab: 1.5, pitchDamp: 2.6,
+      /** The fighter roll: nearly 3x the Slipstream's authority. */
+      rollAuth: 3.6, rollStab: 0.20, rollDamp: 2.2,
+      yawStab: 1.7, yawDamp: 1.6, rudder: 0.5,
+      groundSteer: 0.8,
+      /** Gear stiffened for 7.2 t slamming a runway. */
+      gearK: 1600000, gearC: 140000, muRoll: 0.03, muBrake: 0.85, muLat: 1.0,
+      pedBlockAlt: 2.5,
+      /** Reheat: +34 kN with its own lapse; SHIFT past the firewalled lever. */
+      afterburner: { thrust: 34000, Vmax: 470, spool: 0.7 },
+    },
+    /** SHIFT winds the throttle lever up, SPACE winds it down; SHIFT held at
+     *  the firewall lights the burner. See `plane.js`. */
+    boost: { kind: 'throttle', torque: 1 },
+    paints: ['milair'],
+    style: {
+      shape: 'jet',
+      /** Belly and fin top — the collision probe ring. */
+      groundY: 0.55,
+      roofY: 3.4,
+      hwMax: 0.85,
+      fuseZ0: -6.4, fuseZ1: 5.6, fuseY: 1.35, fuseR: 0.78, noseZ: 7.0,
+      /** Bubble canopy over the single seat, well forward. */
+      cabinZ0: 2.6, cabinZ1: 4.4, cabinY0: 1.5, cabinY1: 2.35, floorY: 1.15,
+      /** Seating fields for the generic `seatAnchor` path — see the Skylark. */
+      sillY: 0.62, beltY: 1.62, cowlZ: 4.35,
+      /** The cropped delta: root chord a third of the jet, swept hard. */
+      wingY: 1.15, wingZ: -0.9, wingSpan: 9.6, wingChord: 4.6, wingThick: 0.20,
+      wingSweep: 0.55,
+      /** Twin tails, canted outboard. */
+      finZ: -5.2, finY0: 1.6, finY1: 3.42, finChord: 1.9, finX: 0.62, finCant: 0.32,
+      stabZ: -5.7, stabSpan: 4.4, stabChord: 1.3,
+      /** Tricycle gear — the same fields `makePlaneGear` reads for the props. */
+      gearNoseZ: 4.6, gearMainZ: -0.6, gearX: 1.6, gearWheelR: 0.30, gearY: 0.0,
+      /** The reheat can, and its dark annular interior. */
+      nozzle: { z: -6.9, r: 0.52, len: 1.1 },
+      intake: { x: 0.95, z: 1.4 },
+      roundel: { x: 3.0, z: -2.2, r: 0.42 },
+      headlight: { w: 0.10, h: 0.09, y: 0.7, inset: 0, kind: 'round' },
+      taillight: { w: 0.07, h: 0.07, y: 3.2, inset: 0, kind: 'round' },
     },
   },
 

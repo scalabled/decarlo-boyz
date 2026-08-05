@@ -5,6 +5,7 @@ import { planBuilding, buildLot, buildLotLod, blockPalette } from './archetypes.
 import { districtStyle, SURFACES } from './palette.js';
 import { buildLandmark, LANDMARKS, landmarkClaims, adoptLandmarkSites } from './landmarks.js';
 import { buildAirfield } from './airfield.js';
+import { buildAirbase } from './airbase.js';
 import { Skyline } from './skyline.js';
 import { syntheticTiles, syntheticLots, SYNTH_TILE } from './debug.js';
 import { clipHalfPlane, polyArea, polyCentroid } from './geom.js';
@@ -315,6 +316,11 @@ export class BuildingSystem {
     // Always resident, like the landmarks — a 600 m runway with pop-in sheds
     // is worse than none.
     this._buildAirfields();
+
+    // Ridgeline AFB: hangars, tower, radar dome, bunkers, tanks and the
+    // collision-backed perimeter fence, on the site `world` publishes as
+    // `world.airbase`. Resident for the same reason as the airfields.
+    this._buildAirbase();
 
     // If `world` is still a stub (no lot stream), drive a synthetic city so the
     // generators can be developed and reviewed in isolation. Self-removing: the
@@ -1227,6 +1233,54 @@ export class BuildingSystem {
     }
   }
 
+  // --------------------------------------------------------------- airbase --
+  /**
+   * Ridgeline AFB, one indivisible job — same shape as `_buildAirfields`.
+   * The site (bench, layout rects, fence polygon, gates) is read off
+   * `world.airbase`, published by `world/airbase.js`, never re-derived.
+   * Gated by `src/world/basesweep.mjs`; absent under `?noairbase=1`.
+   */
+  _buildAirbase() {
+    this.airbaseTile = null;
+    this.airbaseReport = null;
+    const ab = this.world?.airbase;
+    if (!ab?.pad || !ab.layout) return;
+    this.schedule(() => {
+      const T = new TileBuilder(this.lib, 'ab_ridge');
+      const reach = 720;
+      T.setKeepOut(this._keepOutFor(this._roadsNear([
+        [ab.x - reach, ab.z - reach], [ab.x + reach, ab.z - reach],
+        [ab.x + reach, ab.z + reach], [ab.x - reach, ab.z + reach],
+      ])));
+      let report = null;
+      try {
+        report = buildAirbase(
+          T, this.lib, ab, new Rng((ab.id.length * 0x9e37 + ab.x) >>> 0),
+          (px, pz) => this._groundAt(px, pz), this.world.roads
+        );
+      } catch (err) {
+        console.error('[buildings] airbase failed', err);
+        return;
+      } finally {
+        T.setKeepOut(null);
+      }
+      if (!report) return;
+      const built = T.build(this.physics);
+      this.root.add(built.group);
+      this.render?.patchMaterials?.(built.group);
+      this.airbaseTile = built;
+      this.airbaseReport = report;
+      this._accum(built.stats);
+      this._colDirty = true;
+      const s = built.sphere;
+      built.cullOff =
+        this.render?.registerCullGroup?.(built.group, {
+          center: s ? [s.center.x, s.center.y, s.center.z] : [ab.x, 24, ab.z],
+          radius: s ? s.radius + 4 : 760,
+        }) ?? null;
+    }, 8);
+  }
+
   // ---------------------------------------------------------------- runtime --
   update(dt, ctx) {
     this._drain(dt);
@@ -1391,6 +1445,21 @@ export class BuildingSystem {
       built.push(r3);
     }
 
+    // ...and the airbase, whose palette keys (mil_drab, mil_concrete,
+    // hazard_yellow) appear nowhere else in the city.
+    {
+      const ab = this.world?.airbase;
+      if (ab?.pad && ab.layout && this.world?.roads) {
+        const T4 = new TileBuilder(this.lib, 'pw_ab');
+        try {
+          buildAirbase(T4, this.lib, ab, new Rng(11), (px, pz) => this._groundAt(px, pz), this.world.roads);
+          const r4 = T4.build(null);
+          scene.add(r4.group);
+          built.push(r4);
+        } catch { /* prewarm never blocks boot */ }
+      }
+    }
+
     /**
      * The impostor tier's three surfaces are used ONLY by the resident skyline
      * field, which is built in `init()` and never goes through `TileBuilder` —
@@ -1503,6 +1572,11 @@ export class BuildingSystem {
       releaseTile(b, this.physics);
     }
     this.airfieldTiles = null;
+    if (this.airbaseTile) {
+      this.airbaseTile.cullOff?.();
+      releaseTile(this.airbaseTile, this.physics);
+      this.airbaseTile = null;
+    }
     this._rgrid = null;
     this._rgSeen = null;
     this.skyline?.dispose();

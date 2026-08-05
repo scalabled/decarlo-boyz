@@ -25,6 +25,7 @@ import { tyreForces, rollingResistance, surfaceGrip, peakSlipRatio } from './tyr
 import { stepBoat, makeHullSamples } from './boat.js';
 import { stepHeli, makeSkidPoints } from './heli.js';
 import { stepPlane, makePlaneGear } from './plane.js';
+import { initTurret, aimTurret, fireShell } from './tank.js';
 import { WATER, HERO } from './specs.js';
 
 const GRAVITY = -9.81;
@@ -411,8 +412,13 @@ export class Vehicle {
     this.holdAlt = 0;
     /** Fixed-wing throttle LEVER, 0..1: SHIFT winds it up, SPACE down. See `plane.js`. */
     this.throttleLever = 0;
+    /** Reheat, 0..1 — only ever non-zero on a spec with `flight.afterburner`.
+     *  PUBLISHED for `fx` (nozzle flame length) and `audio`. See `plane.js`. */
+    this.afterburner = 0;
     if (spec.kind === 'heli') this.skidPoints = makeSkidPoints(spec);
     if (spec.kind === 'plane') this.gearPoints = makePlaneGear(spec);
+    /** The tank's articulated turret: yaw/pitch state + reload clock. */
+    if (spec.turret) initTurret(this);
 
     /**
      * PER-HERO MODIFIERS, set by `VehicleSystem` when a player takes the wheel
@@ -526,6 +532,28 @@ export class Vehicle {
   wake() {
     this.sleeping = false;
     this._sleepTimer = 0;
+  }
+
+  /* ---------------------------------------------------------- turret -- */
+
+  /**
+   * Command the turret at a WORLD point (tank only; a no-op returning false on
+   * anything without a `spec.turret`). The barrel SLEWS at the bounded rates
+   * in the spec — see `tank.js` — it never snaps. Convenience over
+   * `vehicles.aimTurret(v, p)` so an AI emplacement holding the handle needs
+   * no second lookup.
+   */
+  aimTurret(worldPoint) {
+    return aimTurret(this, worldPoint);
+  }
+
+  /**
+   * Fire the main gun along the barrel's CURRENT emitted direction (tank
+   * only). Returns the live shell, or null while the ~4 s reload runs.
+   * `target` optionally re-commands the turret in the same call.
+   */
+  fireShell(target = null) {
+    return fireShell(this.sys, this, target);
   }
 
   /* ------------------------------------------------------------ step -- */
@@ -1854,6 +1882,19 @@ export class Vehicle {
         if (r.axis === 'x') r.pivot.rotation.x = this.tailPhase;
         else if (r.axis === 'z') r.pivot.rotation.z = this.rotorPhase;
         else r.pivot.rotation.y = this.rotorPhase;
+      }
+    }
+
+    // The tank's turret: traverse about y on the ring, elevation about x at
+    // the trunnion. Driven from `turretYaw`/`gunPitch`, which `stepTurret`
+    // slews — so the DRAWN barrel is the same pose `muzzleWorld` computes and
+    // the shell leaves the end of the gun you can see.
+    const turrets = this.model.turrets;
+    if (turrets) {
+      for (let i = 0; i < turrets.length; i++) {
+        const t = turrets[i];
+        t.pivot.rotation.y = this.turretYaw ?? 0;
+        t.gun.rotation.x = -(this.gunPitch ?? 0);
       }
     }
   }
