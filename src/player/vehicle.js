@@ -678,14 +678,31 @@ export class VehicleHandler {
        * `src/core/input.js` already has `sprint`.
        */
       const want = s ? !!s.boost : input.action('sprint');
-      this._stepNitro(dt, want);
+      /**
+       * FLIGHT KINDS TAKE THE SPRINT CHANNEL RAW, NOT THROUGH THE BOTTLE.
+       *
+       * `plane.js` reads `input.boost` as the THROTTLE LEVER (Shift winds it up)
+       * and `heli.js` reads it as DESCENT. The nitro bottle is a car mechanic —
+       * it only opens above a throttle pedal (`throttle > minThrottle`) and
+       * drains in 3.6 s — and on an aircraft the "throttle pedal" is the
+       * ELEVATOR (`this.throttle` = stick-forward = nose down). MEASURED on the
+       * real key path: holding Shift in a Skylark delivered `input.boost 0` for
+       * ten seconds — the bottle never opened because no forward stick was held —
+       * so the lever stayed at 0 and the aeroplane never rolled. That is the
+       * "airplane does not take off or move" report, and it is the same defect
+       * heli.js's header flagged as `player/vehicle.js`'s to remove (which left
+       * the helicopter unable to DESCEND on Shift). Forward the sprint press
+       * straight through for a flying machine; the car path is untouched.
+       */
+      const flying = v.spec?.kind === 'plane' || v.spec?.kind === 'heli';
+      this._stepNitro(dt, flying ? false : want);
       this._setInput(
         this.throttle, this.brake, this.steer,
         // Space is the handbrake in a car — the same key the harness scripts
         // as `jump`, which is what it is on foot.
         s ? !!s.jump : input.action('jump'),
         s ? !!s.horn : input.action('horn'),
-        this.nitroOn ? 1 : 0
+        flying ? (want ? 1 : 0) : (this.nitroOn ? 1 : 0)
       );
       if (vehicles && typeof vehicles.setInput === 'function') {
         try { vehicles.setInput(v, this._input); } catch { /* stub */ }

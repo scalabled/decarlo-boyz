@@ -390,6 +390,94 @@ try {
   rec('hud', 'the controls hide under a modal', hidden === false, `visible ${hidden}`);
 
   /* ==================================================================== */
+  /* FLYING, ON A THUMB                                                   */
+  /* ==================================================================== */
+  //
+  // The report: "mobile controls need to support flying the airplane as well."
+  // The joystick already drives pitch/roll (it writes the same
+  // `control.throttle/brake/steer` the elevator and ailerons read), so what a
+  // flying vehicle needs on touch is the THROTTLE — and the RUN button already
+  // holds `ShiftLeft`, which `plane.js` reads as throttle-up. This drives that
+  // button for real and asserts the EMITTED plane winds up. The plane is put on
+  // a real airfield runway (`world.airfields`) so it has somewhere to roll; the
+  // seat is taken through `game.debugBoard` (boarding-by-touch is proven for
+  // cars above — this case is about the throttle button, not the door).
+  const planeSnap = () => page.evaluate(() => {
+    const v = window.__PLANE__;
+    const pl = window.__ENGINE__.ctx.peek('player');
+    if (!v) return null;
+    const q = v.quaternion;
+    const fx = 2 * (q.x * q.z + q.w * q.y), fy = 2 * (q.y * q.z - q.w * q.x), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+    const fwd = v.velocity.x * fx + v.velocity.y * fy + v.velocity.z * fz;
+    return {
+      airspeed: +fwd.toFixed(2),
+      lever: +(v.throttleLever ?? 0).toFixed(3),
+      inputBoost: +(v.input.boost ?? 0).toFixed(2),
+      seated: pl?.vehicles?.seated === true,
+      kind: v.spec?.kind ?? null,
+      runLabel: document.querySelector('.ow-tbtn.run small')?.textContent ?? null,
+    };
+  });
+
+  const flySetup = await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const player = e.ctx.peek('player');
+    const veh = e.ctx.peek('vehicles');
+    const world = e.ctx.peek('world');
+    const game = e.ctx.peek('game');
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    const fields = world?.airfields;
+    if (!fields?.length) return { err: 'no airfields' };
+    const af = fields[0];
+    const c = Math.cos(af.yaw), s = Math.sin(af.yaw);
+    const len = af.runway?.[0] ?? 400;
+    const px = af.x + s * (-len * 0.32), pz = af.z + c * (-len * 0.32);
+    for (const o of veh.vehicles.slice()) {
+      if (Math.hypot(o.position.x - px, o.position.z - pz) < 60) { try { veh.despawn(o); } catch (err) { /* */ } }
+    }
+    const v = game.wq.spawnVehicle('plane', px, pz, af.yaw);
+    if (!v) return { err: 'spawn failed' };
+    window.__PLANE__ = v;
+    return { boarded: game.debugBoard(v), field: af.name };
+  });
+  for (let i = 0; i < 12; i++) { await pump(20); if ((await planeSnap())?.seated) break; }
+  const seatedPlane = await planeSnap();
+  rec('flight', 'the player takes the seat of a plane on the runway',
+    !!seatedPlane?.seated && seatedPlane.kind === 'plane',
+    flySetup.err ? `SETUP FAILED: ${flySetup.err}` : `${flySetup.field} · kind ${seatedPlane?.kind} · seated ${seatedPlane?.seated}`);
+  rec('flight', 'the RUN button relabels to the throttle in a plane',
+    /THR/i.test(seatedPlane?.runLabel ?? ''), `RUN label "${seatedPlane?.runLabel}"`);
+
+  // NEGATIVE BASELINE: seated, nothing held, the plane does not wind up on its own.
+  await pump(240);
+  const idlePlane = await planeSnap();
+  rec('flight', 'nothing held — the plane sits idle (negative baseline)',
+    (idlePlane?.airspeed ?? 9) < 2 && (idlePlane?.lever ?? 9) < 0.1,
+    `airspeed ${idlePlane?.airspeed} m/s, lever ${idlePlane?.lever}`);
+
+  // Hold the touch throttle (RUN) and watch the emitted lever wind up and the
+  // airspeed build — the real touch path, `ShiftLeft` -> input.boost -> stepPlane.
+  const runBtn = await rect('.ow-tbtn.run');
+  await touch('.ow-tbtn.run', 'touchstart', 30, runBtn.x, runBtn.y);
+  let flew = idlePlane;
+  for (let i = 0; i < 10; i++) { await pump(60); flew = await planeSnap(); if (flew?.airspeed > 6) break; }
+  await touch('.ow-tbtn.run', 'touchend', 30, runBtn.x, runBtn.y);
+  rec('flight', 'holding the touch throttle delivers input.boost to the plane',
+    (flew?.inputBoost ?? 0) > 0.5, `input.boost ${flew?.inputBoost}`);
+  rec('flight', 'the touch throttle winds the lever up and builds airspeed',
+    (flew?.lever ?? 0) > 0.5 && (flew?.airspeed ?? 0) > 6,
+    `lever ${flew?.lever}, airspeed ${flew?.airspeed} m/s (idle was ${idlePlane?.airspeed})`);
+
+  await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const player = e.ctx.peek('player');
+    const veh = e.ctx.peek('vehicles');
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch (err) { /* */ } window.__PLANE__ = null; }
+  });
+  await pump(20);
+
+  /* ==================================================================== */
   /* THE PAUSE MENU, ON A THUMB                                           */
   /* ==================================================================== */
   //

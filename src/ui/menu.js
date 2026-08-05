@@ -36,17 +36,23 @@ const SFX_BUSES = ['weapons', 'foley', 'ambience', 'sirens', 'vehicles', 'voice'
  * brother — and is left off only because the X wheel already does that with a
  * picture of who you are choosing.
  *
- * The three keys that are on purpose absent:
+ * The two keys that are on purpose absent:
  *   - `` ` `` / F8 — the cheat menu. `ui` appends that to `hintRow` itself, and
  *     only when cheats exist at all (see `UiSystem.init`).
  *   - melee. `ACTIONS.melee` is `[]` on purpose: in this game a swing IS the
  *     fire button with fists or a pipe equipped (`weapons/index.js:1264`), so
  *     LMB carries it and there is no melee key to name.
- *   - the helicopter's climb DIRECTION. `heli.js` currently has Shift climb and
- *     Space descend, and that pair is liable to be swapped, so the row names the
- *     two keys that own the collective and leaves which-is-which to the first
- *     press. Both keys are bound either way round, so the panel cannot go stale
- *     on the swap.
+ *
+ * THE AEROPLANE AND THE HELICOPTER GET THEIR OWN SETS, and they do NOT share a
+ * mapping — that was the whole "airplane does not take off, I can't find the
+ * throttle" report. A plane's SHIFT is the THROTTLE (hold it to build speed);
+ * a helicopter's SHIFT is DESCEND and its SPACE is CLIMB. One "FLYING" block
+ * that named `[SHIFT, SPACE] Climb · descend` was both wrong for the plane (that
+ * pair is its throttle, and there is no direct "climb") and backwards for the
+ * heli (SPACE climbs, not SHIFT). Each set is now read straight out of the
+ * controller that consumes the key — see the comments above `AEROPLANE` and
+ * `HELICOPTER` in `CONTROL_GROUPS`. `src/ui/aircraftprobe.mjs` gates that the
+ * plane actually flies on the keys this panel names, through the real input path.
  */
 const CONTROL_GROUPS = [
   ['ON FOOT', [
@@ -80,10 +86,29 @@ const CONTROL_GROUPS = [
     [['LMB'], '', 'Drive-by'],
     [['V'], '', 'Camera view'],
   ]],
-  ['FLYING', [
-    [['SHIFT', 'SPACE'], '/', 'Climb · descend'],
-    [['W', 'S'], '/', 'Nose down / up'],
-    [['A', 'D'], '/', 'Yaw'],
+  // EVERY LINE READ OUT OF `src/vehicles/plane.js` — the throttle lever is
+  // `input.boost` (SHIFT) up and `input.handbrake` (SPACE) down; W/S is the
+  // elevator (`control.throttle - control.brake`, W positive = nose DOWN, so S
+  // pulls back and rotates); A/D the ailerons (`control.steer`, roll, and the
+  // nosewheel on the ground). Take-off is emergent, not scripted: hold SHIFT to
+  // build airspeed, then pull back on S once the wing has the speed to fly.
+  ['AEROPLANE', [
+    [['SHIFT'], '', 'Throttle up — hold to build speed'],
+    [['SPACE'], '', 'Throttle down · wheel brake'],
+    [['S'], '', 'Pull back — nose up · take off'],
+    [['W'], '', 'Push — nose down'],
+    [['A', 'D'], '/', 'Roll · steer on the ground'],
+    [['F'], '', 'Get out'],
+  ]],
+  // EVERY LINE READ OUT OF `src/vehicles/heli.js` — the collective is SPACE
+  // (`input.handbrake`) climb and SHIFT (`input.boost`) descend (see that file's
+  // header for why SPACE, not SHIFT, is up); W/S is the fore/aft cyclic and A/D
+  // the pedals. Hold SPACE from a cold start and it winds the rotor up and lifts.
+  ['HELICOPTER', [
+    [['SPACE'], '', 'Climb'],
+    [['SHIFT'], '', 'Descend'],
+    [['W', 'S'], '/', 'Forward / back'],
+    [['A', 'D'], '/', 'Turn'],
     [['F'], '', 'Get out'],
   ]],
   ['THE CITY', [

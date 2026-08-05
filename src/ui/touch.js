@@ -100,6 +100,10 @@ const ICONS = {
   hand: 'M9 12V5.6a1.5 1.5 0 013 0V12M12 11V4.6a1.5 1.5 0 013 0V12M15 12V6.6a1.5 1.5 0 013 0V15a6 6 0 01-6 6h-1a5 5 0 01-4.4-2.6L4 13.4a1.6 1.6 0 012.6-1.8L9 14',
   star: 'M12 3.4l2.6 5.6 6 .8-4.4 4.2 1.1 6-5.3-3-5.3 3 1.1-6L3.4 9.8l6-.8L12 3.4z',
   bug: 'M9 6a3 3 0 016 0M6 10h12M7 10v4a5 5 0 0010 0v-4M3 12h4M17 12h4M4.5 7.5L7 9M19.5 7.5L17 9M4.5 17.5L7 16M19.5 17.5L17 16',
+  // Throttle / collective: a double chevron reads as "more / less". Up is the
+  // aeroplane's throttle-up and the helicopter's climb; down is the reverse.
+  climb: 'M6 13l6-6 6 6M6 19l6-6 6 6',
+  descend: 'M6 11l6 6 6-6M6 5l6 6 6-6',
 };
 
 /**
@@ -721,6 +725,22 @@ export class TouchControls {
     return !!this.ui?.state?.inVehicle;
   }
 
+  /**
+   * The `kind` of the vehicle the player is seated in ('car' | 'plane' | 'heli'
+   * | 'boat' | ...), or null on foot. Duck-typed off the player's handler so a
+   * headless bench without `player` reads null and the layer stays in its
+   * driving/walking roles. It is what swaps the two vertical buttons into their
+   * FLIGHT roles in `update` — the throttle and the collective.
+   */
+  _vehicleKind() {
+    if (!this._inVehicle()) return null;
+    try {
+      return this.ctx?.peek?.('player')?.vehicles?.vehicle?.spec?.kind ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   _onAct() {
     this.ui.triggerAction('touch');
   }
@@ -780,12 +800,52 @@ export class TouchControls {
     }
 
     const driving = this._inVehicle();
-    setText(this.bBrake._label, driving ? 'BRAKE' : 'JUMP');
-    this._setIcon(this.bBrake, driving ? 'brake' : 'jump');
+    const kind = this._vehicleKind();
+    const flying = kind === 'plane' || kind === 'heli';
+
+    /**
+     * THE TWO VERTICAL BUTTONS ARE CONTEXT-SWAPPED, WIRED TO THE SAME CODES.
+     *
+     * RUN is `ShiftLeft` and BRAKE is `Space` in every context — the codes never
+     * change, so no new input path is invented (CONTROLS.md's whole thesis). What
+     * changes is the ROLE the current vehicle reads them as, and the label/icon
+     * follow it:
+     *
+     *   on foot   RUN = sprint,  BRAKE = jump
+     *   in a car  RUN = boost (greyed nitro), BRAKE = handbrake
+     *   AEROPLANE RUN = throttle UP (input.boost), BRAKE = throttle DOWN / brake
+     *             (input.handbrake) — see plane.js
+     *   HELICOPTER RUN = descend (input.boost), BRAKE = climb (input.handbrake)
+     *             — see heli.js (SPACE climbs, SHIFT descends)
+     *
+     * Pitch/roll (plane) and cyclic/pedals (heli) are the JOYSTICK already — it
+     * writes the same `control.throttle/brake/steer` the elevator and ailerons
+     * read — so the stick needs no special case here.
+     */
+    let brakeLabel, brakeIcon, runLabel, runIcon;
+    if (kind === 'heli') {
+      brakeLabel = 'CLIMB'; brakeIcon = 'climb';
+      runLabel = 'DESC'; runIcon = 'descend';
+    } else if (flying) {
+      brakeLabel = 'THR-'; brakeIcon = 'descend';
+      runLabel = 'THR+'; runIcon = 'climb';
+    } else if (driving) {
+      brakeLabel = 'BRAKE'; brakeIcon = 'brake';
+      runLabel = 'RUN'; runIcon = 'run';
+    } else {
+      brakeLabel = 'JUMP'; brakeIcon = 'jump';
+      runLabel = 'RUN'; runIcon = 'run';
+    }
+    setText(this.bBrake._label, brakeLabel);
+    this._setIcon(this.bBrake, brakeIcon);
+    setText(this.bRun._label, runLabel);
+    this._setIcon(this.bRun, runIcon);
     setText(this.bWep._label, driving ? 'HORN' : 'WEP');
     this._setIcon(this.bWep, driving ? 'horn' : 'wep');
+    // AIM is meaningless in any vehicle. RUN is a live throttle in the air but
+    // the greyed-out nitro in a ground vehicle, so it is only dimmed for a car.
     setClass(this.bAim, 'off', driving);
-    setClass(this.bRun, 'off', driving);
+    setClass(this.bRun, 'off', driving && !flying);
   }
 
   /**
