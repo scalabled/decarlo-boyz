@@ -66,6 +66,24 @@
  * Carson measured 16 of 16 rays blocked with a roof 0.0 m overhead before the
  * escape test and walks freely after it, and `[director] unstuck` is observed
  * firing on the Mt. Washington spawn in this probe's own log.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AIDAN, THE BODY SHOP, AND THE LARGE-INTERIOR CASE
+ *
+ * Aidan's case is the last two rows. His fresh spawn was REPORTED as "inside a
+ * building, could not get out"; measured, it is not — `spawnFor` resolves the
+ * body-shop routine through the road network to open pavement at (637,-457) and
+ * he walks freely, which is the control. Seeding his SAVED position at a
+ * Lawrenceville building interior beside the shop (617,-437) — the shape of the
+ * report — he still walks, because a shell in this city keeps an ankle-height
+ * gap (a doorway, a shopfront) on some bearing and is never fully sealed.
+ *
+ * The one way to be sealed on EVERY bearing is a large hollow shell whose walls
+ * are all beyond the 2.0 m ankle reach — a case `_trapped` cannot see. That
+ * blind spot, the `_enclosedShell` detector that closes it, and the negative
+ * control (detector off -> undetected -> left trapped) are gated deterministically
+ * against known geometry in `src/game/shellprobe.mjs` (`npm run shell`, node),
+ * because the shipped city has no such interior to seed here without flakiness.
  */
 import { chromium } from 'playwright';
 import { startServer, stopServer } from '../../tools/lib/server.mjs';
@@ -103,6 +121,19 @@ const CASES = [
   {
     id: 'dylan', hour: 9, label: 'dylan 09:00 from a SAVED pos on the steps',
     savedPos: [-506.4, 100.1, 450.4],
+  },
+  /*
+   * AIDAN — the reported "spawned inside the body shop" brother. His fresh
+   * switch is the control above (aidan 09:00, open pavement); this is the SAVED
+   * path, seeded at a building interior beside the shop in Lawrenceville — the
+   * shape of the complaint. He must be able to walk when you arrive as him,
+   * whether because the spot is not actually sealed or because the deferred
+   * unstick has moved him. The fully-sealed large-shell case that only
+   * `_enclosedShell` catches is gated in `shellprobe.mjs`; see the header.
+   */
+  {
+    id: 'aidan', hour: 9, label: 'aidan 09:00 from a SAVED pos by the body shop',
+    savedPos: [617, 23.67, -437],
   },
 ];
 

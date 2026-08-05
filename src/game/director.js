@@ -91,6 +91,35 @@ const MIN_ESCAPE = 5;
 /** Height the ground query drops from when vetting a candidate point. */
 const GROUND_FROM = 200;
 
+/**
+ * THE LARGE-INTERIOR BLIND SPOT the ankle test alone cannot see.
+ *
+ * `ESCAPE_REACH` is 2.0 m, and that is right for a kerb, a riser or the
+ * boathouse whose walls are within arm's reach — 16 of 16 rays blocked at 2 m
+ * and `open` collapses to 0. But a man standing in the middle of a large hollow
+ * building shell has every wall 4-9 m away, so at 2 m EVERY ankle ray misses,
+ * every bearing counts as `open`, and the test declares open ground inside a
+ * room he cannot leave. There is no roof to key on either: a city shell is
+ * walls-per-edge with an OPEN top (see `buildings/archetypes.js` — "there are no
+ * enterable interiors ... a doorway in the hull led into an unlit hollow
+ * shell"), so the boathouse's 0 m ceiling is not a signal the general case has.
+ *
+ * So the second question is: is there ANY bearing you can walk out along? Cast
+ * `SHELL_RAYS` rays to `SHELL_REACH`; if not one of them clears that far, the
+ * walls close on every side and this is the inside of a shell, whatever its
+ * size. A street spawn always has its long axis clear to the horizon, so it
+ * escapes on that bearing and is never mistaken for a room. Measured on the
+ * shipped map with the city streamed: good open spawns (fresh Aidan, the
+ * boathouse rescue) clear the full 30 m on many bearings; the walk-verified
+ * sealed pockets — Strip Market (424,-296), a Lawrenceville interior (617,-437)
+ * beside the body shop — clear under 9 m on EVERY bearing and cap a 3 s walk at
+ * 3.6-6.0 m. `SHELL_REACH` sits in that gap. More rays than `_trapped`'s eight,
+ * because a doorway missed between samples would read as sealed; at 16 the worst
+ * unsampled gap is 22 degrees.
+ */
+const SHELL_REACH = 9.0;
+const SHELL_RAYS = 16;
+
 export class Director {
   constructor(ctx, wq) {
     this.ctx = ctx;
@@ -104,6 +133,15 @@ export class Director {
     this._pose = { x: 0, y: null, z: 0, yaw: 0, score: 0 };
     /** Seconds left to wait for streaming before the post-spawn unstick check. */
     this._unstickT = 0;
+    /**
+     * Enclosing-shell detection (the large-interior term of `_trapped`). A
+     * probe flips this off to run the negative control against the LIVE code
+     * with no edit — same pattern as the pause gates' `debugIgnorePause`. With
+     * it off, `_trapped` reverts to the ankle-only test that cannot see a shell
+     * whose walls are all beyond `ESCAPE_REACH`, and a brother seeded inside one
+     * is left trapped, which is the point of the control.
+     */
+    this.shellDetect = true;
   }
 
   init(save) {
@@ -230,6 +268,42 @@ export class Director {
   }
 
   /**
+   * IS HE SEALED INSIDE A SHELL? The large-interior blind spot `_trapped` cannot
+   * see (see SHELL_REACH). Deliberately SEPARATE from `_trapped`:
+   *
+   * `_trapped` grades candidate ground during spawn resolution — `_onRoad`,
+   * `groundPose`, the unstick ring all call it dozens of times, and it must stay
+   * conservative. Folding an enclosure term into it once graded a perfectly good
+   * boathouse-waterfront rescue point as a room and shoved Carson into a wall:
+   * the boathouse case went 4/4 -> 3/4. So this is asked ONLY by the deferred
+   * `unstick`, about the ONE point the player actually ended up on, after the
+   * city has streamed — never during resolution.
+   *
+   * A bearing whose first wall is beyond `SHELL_REACH` — or has no wall at all —
+   * is a corridor out, and the moment one turns up this bails: not sealed. A
+   * street keeps its long axis clear to the horizon and always has one; the
+   * inside of a hollow shell has none, whatever its size. So this returns true
+   * only when EVERY bearing is walled within reach — a strong, specific
+   * signature that a normal spawn with even one gap (a doorway, an alley mouth,
+   * the open side of a prop ring) never trips. Even then the caller relocates
+   * only to a verified-open spot, so a false read from half-streamed collision
+   * costs nothing.
+   */
+  _enclosedShell(x, z, y) {
+    if (!this.shellDetect) return false;
+    const ph = this.ctx.peek('physics');
+    if (typeof ph?.raycast !== 'function') return false;
+    const mask = ph.MASK?.WORLD;
+    const H = y + ANKLE_PROBE_Y;
+    for (let i = 0; i < SHELL_RAYS; i++) {
+      const a = (i / SHELL_RAYS) * Math.PI * 2;
+      const hit = ph.raycast({ x, y: H, z }, { x: Math.cos(a), y: 0, z: Math.sin(a) }, SHELL_REACH, mask);
+      if (!hit?.hit) return false;   // a way out on this bearing — not sealed
+    }
+    return true;   // walls on every bearing within reach: a shell
+  }
+
+  /**
    * Re-check where the player ACTUALLY ended up, once the city around him
    * exists, and move him if he cannot walk out.
    *
@@ -272,10 +346,19 @@ export class Director {
     if (!w?.streamingIdle?.() || !pl) return false;
     const f = pl.feetPosition ?? pl.position;
     if (!f || !Number.isFinite(f.x)) return false;
-    if (!this._trapped(f.x, f.z, f.y)) return false;
+    // Two ways to be stuck: the ankle test (kerb / riser / small shell) OR
+    // sealed inside a large hollow shell whose walls are all beyond the ankle
+    // reach — the building-interior trap `_trapped` cannot see.
+    if (!this._trapped(f.x, f.z, f.y) && !this._enclosedShell(f.x, f.z, f.y)) return false;
+    const ph = this.ctx.peek('physics');
+    const mask = ph?.MASK?.WORLD;
 
     // Deterministic rings, nearest first — the first point he can walk out of
-    // wins, so he moves the shortest distance that solves it.
+    // wins, so he moves the shortest distance that solves it. Every candidate is
+    // validated BOTH ways: `_score >= 3` (dry, walkable ground, runs `_trapped`)
+    // AND not itself the inside of a shell. That second gate is what makes a
+    // false enclosure reading harmless — a bad trigger cannot land him anywhere
+    // that is not verified open, so at worst he does not move.
     for (let ring = 1; ring <= 5; ring++) {
       const r = (maxRadius / 5) * ring;
       for (let i = 0; i < 12; i++) {
@@ -283,12 +366,31 @@ export class Director {
         const x = f.x + Math.cos(a) * r;
         const z = f.z + Math.sin(a) * r;
         if (this._score(x, z) < 3) continue;          // _score runs _trapped too
-        const y = this.ctx.peek('physics')?.groundHeight?.(x, z, GROUND_FROM, this.ctx.peek('physics')?.MASK?.WORLD);
+        const y = ph?.groundHeight?.(x, z, GROUND_FROM, mask);
         if (!Number.isFinite(y)) continue;
+        if (this._enclosedShell(x, z, y)) continue;   // a room inside the ring is no rescue
         pl.teleport?.({ x, y, z }, pl.yaw ?? 0);
         console.info(`[director] unstuck from ${f.x.toFixed(0)},${f.z.toFixed(0)} to ${x.toFixed(0)},${z.toFixed(0)}`);
         return true;
       }
+    }
+
+    // Nothing walkable within the ring — a shell wider than `maxRadius`. Fall
+    // back to the ROAD NETWORK, the same authority `spawnFor` trusts: it finds
+    // the nearest carriageway and steps onto the kerb, which by construction has
+    // the street clear on its long axis and so is never itself a shell. This is
+    // the "route the deferred unstick to the nearest street" of a
+    // building-interior trap the local ring cannot climb out of. It is held to
+    // the same two gates as a ring point, so a garbled road resolution cannot
+    // strand him against a wall.
+    const p = this.groundPose(f.x, f.z);
+    let y = p.y;
+    if (!Number.isFinite(y)) y = ph?.groundHeight?.(p.x, p.z, GROUND_FROM, mask);
+    const moved = Math.abs(p.x - f.x) > 0.5 || Math.abs(p.z - f.z) > 0.5;
+    if (Number.isFinite(y) && moved && this._score(p.x, p.z) >= 3 && !this._enclosedShell(p.x, p.z, y)) {
+      pl.teleport?.({ x: p.x, y, z: p.z }, p.yaw ?? pl.yaw ?? 0);
+      console.info(`[director] unstuck from ${f.x.toFixed(0)},${f.z.toFixed(0)} to ${p.x.toFixed(0)},${p.z.toFixed(0)} via road`);
+      return true;
     }
     return false;
   }
