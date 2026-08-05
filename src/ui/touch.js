@@ -101,7 +101,7 @@ const ICONS = {
   star: 'M12 3.4l2.6 5.6 6 .8-4.4 4.2 1.1 6-5.3-3-5.3 3 1.1-6L3.4 9.8l6-.8L12 3.4z',
   bug: 'M9 6a3 3 0 016 0M6 10h12M7 10v4a5 5 0 0010 0v-4M3 12h4M17 12h4M4.5 7.5L7 9M19.5 7.5L17 9M4.5 17.5L7 16M19.5 17.5L17 16',
   // Throttle / collective: a double chevron reads as "more / less". Up is the
-  // aeroplane's throttle-up and the helicopter's climb; down is the reverse.
+  // airplane's throttle-up and the helicopter's climb; down is the reverse.
   climb: 'M6 13l6-6 6 6M6 19l6-6 6 6',
   descend: 'M6 11l6 6 6-6M6 5l6 6 6-6',
 };
@@ -813,7 +813,7 @@ export class TouchControls {
      *
      *   on foot   RUN = sprint,  BRAKE = jump
      *   in a car  RUN = boost (greyed nitro), BRAKE = handbrake
-     *   AEROPLANE RUN = throttle UP (input.boost), BRAKE = throttle DOWN / brake
+     *   AIRPLANE  RUN = throttle UP (input.boost), BRAKE = throttle DOWN / brake
      *             (input.handbrake) — see plane.js
      *   HELICOPTER RUN = descend (input.boost), BRAKE = climb (input.handbrake)
      *             — see heli.js (SPACE climbs, SHIFT descends)

@@ -43,14 +43,14 @@ const SFX_BUSES = ['weapons', 'foley', 'ambience', 'sirens', 'vehicles', 'voice'
  *     fire button with fists or a pipe equipped (`weapons/index.js:1264`), so
  *     LMB carries it and there is no melee key to name.
  *
- * THE AEROPLANE AND THE HELICOPTER GET THEIR OWN SETS, and they do NOT share a
+ * THE AIRPLANE AND THE HELICOPTER GET THEIR OWN SETS, and they do NOT share a
  * mapping — that was the whole "airplane does not take off, I can't find the
  * throttle" report. A plane's SHIFT is the THROTTLE (hold it to build speed);
  * a helicopter's SHIFT is DESCEND and its SPACE is CLIMB. One "FLYING" block
  * that named `[SHIFT, SPACE] Climb · descend` was both wrong for the plane (that
  * pair is its throttle, and there is no direct "climb") and backwards for the
  * heli (SPACE climbs, not SHIFT). Each set is now read straight out of the
- * controller that consumes the key — see the comments above `AEROPLANE` and
+ * controller that consumes the key — see the comments above `AIRPLANE` and
  * `HELICOPTER` in `CONTROL_GROUPS`. `src/ui/aircraftprobe.mjs` gates that the
  * plane actually flies on the keys this panel names, through the real input path.
  */
@@ -92,7 +92,7 @@ const CONTROL_GROUPS = [
   // pulls back and rotates); A/D the ailerons (`control.steer`, roll, and the
   // nosewheel on the ground). Take-off is emergent, not scripted: hold SHIFT to
   // build airspeed, then pull back on S once the wing has the speed to fly.
-  ['AEROPLANE', [
+  ['AIRPLANE', [
     [['SHIFT'], '', 'Throttle up — hold to build speed'],
     [['SPACE'], '', 'Throttle down · wheel brake'],
     [['S'], '', 'Pull back — nose up · take off'],
