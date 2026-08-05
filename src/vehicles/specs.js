@@ -119,6 +119,27 @@ export const PAINTS = {
     { name: 'pylon orange', color: 0xc4561a, f: 0.5, c: 1.0 },
   ],
   /**
+   * BUSH LIVERY — the Grizzly STOL. Rugged, high-visibility field colours a
+   * backcountry machine actually wears (cub yellow, tundra red, spruce), low
+   * clearcoat because it lives on gravel strips, not a ramp. Disjoint from the
+   * Skylark's `work`/`common` greys so the two high-wings never share a coat.
+   */
+  bushair: [
+    { name: 'cub yellow', color: 0xd6a51b, f: 0.20, c: 0.7 },
+    { name: 'tundra red', color: 0x9c3320, f: 0.30, c: 0.8 },
+    { name: 'spruce', color: 0x2f4636, f: 0.20, c: 0.6 },
+  ],
+  /**
+   * TWIN LIVERY — the Meridian light twin. Executive charter colours (white,
+   * navy, burnt silver) with a full gloss clearcoat, disjoint from both the
+   * Slipstream's club pool and the Skylark's fleet greys.
+   */
+  twinair: [
+    { name: 'charter white', color: 0xdededa, f: 0.16, c: 1.0 },
+    { name: 'navy stripe', color: 0x1b3a63, f: 0.42, c: 1.0 },
+    { name: 'burnt silver', color: 0x9a9ea3, f: 0.52, c: 1.0 },
+  ],
+  /**
    * MILITARY POOLS — the tank and the fighter. Flat drab coats (low flake,
    * low clearcoat — armour is painted with a broom, not lacquered), and the
    * two pools are disjoint from each other and from every civilian pool, so a
@@ -2230,6 +2251,217 @@ export const VEHICLE_SPECS = {
     },
   },
 
+  /* -------------------------------------------------- bushplane ---- */
+  /**
+   * THE GRIZZLY — a high-lift STOL bush plane, the beginner's aeroplane.
+   *
+   * Same flight model as the Skylark (`kind: 'plane'`, `stepPlane`), tuned to
+   * the OPPOSITE end of the envelope from the Slipstream — where the sport
+   * plane is fast and twitchy, this is slow, gentle and almost impossible to
+   * get wrong:
+   *
+   *   - SHORT FIELD. A big fat wing — 22 m^2 against the Skylark's 16 and the
+   *     Slipstream's 11 — with a strongly cambered section (`CL0` 0.55, `CLmax`
+   *     1.75). At 1080 kg it un-sticks around 26-30 m/s where the Skylark needs
+   *     ~44, so it is off the ground in a fraction of the roll. `flightprobe`
+   *     and the aircraft probe both fly it off the same runway; the aircraft
+   *     probe parametrizes the climb test over it.
+   *   - GENTLE. The lowest roll authority in the fleet (`rollAuth` 1.0) with
+   *     the most wing-levelling (`rollStab` 0.5) and heavy pitch damping: it
+   *     flies hands-off and will not bite. `aoaCmdFrac` 0.72 lets a new pilot
+   *     hold a big nose-up attitude for the short-field climb without ever
+   *     reaching the stall — the whole point of the angle-of-attack envelope in
+   *     `plane.js`.
+   *   - SLOW. `propVmax` 70 m/s: a workhorse cruise, not a racer.
+   *   - HIGH WING ON STRUTS, a tall fat-tyred taildragger stance and a 13.8 m
+   *     span — the one-glance silhouette of a backcountry machine, and the
+   *     biggest wing in the fleet. Rugged field livery (`bushair`).
+   */
+  bushplane: {
+    id: 'bushplane',
+    name: 'Grizzly',
+    kind: 'plane',
+    seats: 4,
+    doors: 2,
+    dims: { L: 8.8, W: 13.8, H: 3.1 },
+    /** Fuselage/tail box only; the span is bodywork the collision box owns. */
+    mass: 1080,
+    comY: 1.18,
+    comZ: 0.5,
+    /** No real axles; present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 2.9,
+    trackF: 2.6, trackR: 2.6,
+    /** Fat tundra tyres — the bush-plane tell on the ground. */
+    wheel: { radius: 0.42, width: 0.22, rimFrac: 0.5, spokes: 5, style: 'steel' },
+    drive: 'fwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // A big-bore ~180 kW flat-six geared for torque, not revs. Audio/spool
+      // profile only; the prop turns this into thrust in `plane.js`.
+      peakTorque: 580, peakRpm: 2400, redline: 2700, idle: 760,
+      inertia: 0.85, friction: 0.09, brakeTorque: 30,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    /** `plane.js` owns the real drag; a draggy strut-braced airframe leaves a bit. */
+    aero: { cd: 0.03, area: 2.4, downF: 0, downR: 0, yawDrag: 3.4 },
+    body: { hp: 720, crumple: 1.5 },
+    /** Fixed-wing parameters — consumed only by `plane.js`. */
+    flight: {
+      /** Strong static thrust for a short roll, a modest cruise pitch speed. */
+      maxThrust: 5800, propVmax: 70,
+      throttleRate: 2.0, propSpool: 2.2,
+      /** The big high-lift wing: the lowest flying speed in the fleet. */
+      wingArea: 22.0, CL0: 0.55, CLalpha: 5.6, aoaStall: 0.32, CLmax: 1.75,
+      aoaTrim: 0.06,
+      span: 13.8, oswald: 0.82, CD0: 0.036,
+      Vref: 26,
+      /** A little more of the stall band is available for the short-field climb. */
+      aoaCmdFrac: 0.72,
+      /** Gentle, heavily-damped pitch: it flies hands-off. */
+      pitchElev: 0.8, pitchStab: 1.8, pitchDamp: 3.0,
+      /** The tamest roll in the fleet — most levelling, least authority. */
+      rollAuth: 1.0, rollStab: 0.5, rollDamp: 2.9,
+      yawStab: 2.1, yawDamp: 1.9, rudder: 0.5,
+      groundSteer: 1.2,
+      gearK: 240000, gearC: 28000, muRoll: 0.035, muBrake: 0.8, muLat: 0.95,
+      pedBlockAlt: 2.0,
+    },
+    /** SHIFT winds the throttle lever up, SPACE winds it down. See `plane.js`. */
+    boost: { kind: 'throttle', torque: 1 },
+    paints: ['bushair'],
+    style: {
+      shape: 'plane',
+      /** Belly and fin top — the collision probe ring. A tall stance. */
+      groundY: 1.0,
+      roofY: 3.1,
+      /** A fat, deep fuselage. */
+      hwMax: 0.66,
+      fuseZ0: -3.9, fuseZ1: 3.5, fuseY: 1.30, fuseR: 0.66, noseZ: 3.7,
+      /** A big glazed cabin — four seats and a lot of window. */
+      cabinZ0: 1.0, cabinZ1: 3.0, cabinY0: 1.32, cabinY1: 2.22, floorY: 1.12,
+      /** Seating fields for the generic `seatAnchor` path — see the Skylark. */
+      sillY: 0.30, beltY: 1.44, cowlZ: 2.70,
+      /** High wing, well above the fuselage centreline: strut-braced, big span. */
+      wingY: 2.24, wingZ: 1.6, wingSpan: 13.8, wingChord: 2.0, wingThick: 0.26,
+      finZ: -3.55, finY0: 1.5, finY1: 2.98, finChord: 1.35,
+      stabZ: -3.42, stabSpan: 4.4, stabChord: 1.0,
+      /** Tricycle gear on tall legs and fat tyres. */
+      gearNoseZ: 2.5, gearMainZ: -0.2, gearX: 1.65, gearWheelR: 0.42, gearY: 0.0,
+      /** A big slow-turning three-blade prop. */
+      propZ: 3.82, propR: 1.02, propBlades: 3,
+      headlight: { w: 0.13, h: 0.11, y: 1.2, inset: 0, kind: 'round' },
+      taillight: { w: 0.08, h: 0.08, y: 2.8, inset: 0, kind: 'round' },
+    },
+  },
+
+  /* -------------------------------------------------- twinplane ---- */
+  /**
+   * THE MERIDIAN — a light twin, the cross-country machine.
+   *
+   * Same flight model (`kind: 'plane'`, `stepPlane`) but the only aircraft in
+   * the fleet with TWO engines, and its silhouette says so: a clean pointed
+   * nose (no nose prop) and a wing-mounted nacelle with a spinning prop on each
+   * side. `plane.js`'s `buildPlaneBody` grows a `style.engines: 'twin'` branch
+   * for it — the mesh is genuinely different, not a reskin.
+   *
+   * Character: heavier (2100 kg), fast and STABLE. Twice the thrust of the
+   * Slipstream spread across two props (`maxThrust` 10800, `propVmax` 108) on a
+   * clean low wing, so it cruises quick but tracks like a rail — moderate roll
+   * authority, a firm dihedral, calm pitch. The touring plane you fly straight
+   * across the map, between the trainer's gentleness and the fighter's
+   * violence. Charter livery (`twinair`).
+   */
+  twinplane: {
+    id: 'twinplane',
+    name: 'Meridian',
+    kind: 'plane',
+    seats: 6,
+    doors: 2,
+    dims: { L: 10.4, W: 11.8, H: 2.9 },
+    /** Fuselage/tail box only; the span is bodywork the collision box owns. */
+    mass: 2100,
+    comY: 1.10,
+    comZ: 0.5,
+    /** No real axles; present only so `finalizeSpec` can size an inertia tensor. */
+    wheelbase: 3.2,
+    trackF: 2.4, trackR: 2.4,
+    wheel: { radius: 0.32, width: 0.16, rimFrac: 0.55, spokes: 5, style: 'steel' },
+    drive: 'fwd',
+    susp: { travel: 0.1, rideHeight: 0.1, freqF: 1, freqR: 1, dampF: 0.4, dampR: 0.4, reboundScale: 1, arbF: 0, arbR: 0, camberF: 0, camberR: 0, toeF: 0, toeR: 0 },
+    tyre: { ...TYRE_ROAD },
+    engine: {
+      // Two ~200 kW sixes. Audio/spool profile only; the flight block owns thrust.
+      peakTorque: 720, peakRpm: 2700, redline: 3000, idle: 820,
+      inertia: 0.9, friction: 0.09, brakeTorque: 34,
+    },
+    gearbox: { gears: [-1, 0, 1], final: 1, eff: 0.95, shiftUp: 2, shiftDown: 0, shiftTime: 0.4, autoClutchRpm: 1000 },
+    diff: { lock: 1, preload: 0 },
+    brakes: { front: 0, rear: 0, handbrake: 0, bias: 0.5 },
+    steer: { max: 1.0, speedFalloff: 0.0, rate: 3.0, returnRate: 3.4, counterAssist: 0 },
+    /** `plane.js` owns the real drag; the airframe is clean. */
+    aero: { cd: 0.02, area: 2.2, downF: 0, downR: 0, yawDrag: 2.8 },
+    body: { hp: 820, crumple: 1.3 },
+    /** Fixed-wing parameters — consumed only by `plane.js`. */
+    flight: {
+      /** Two engines' worth of static thrust, pitched for a fast cruise. */
+      maxThrust: 10800, propVmax: 108,
+      throttleRate: 1.9, propSpool: 2.3,
+      /** A moderate wing at 2 t: a higher flying speed than the trainers, but
+       *  enough camber to rotate off a normal strip on the pull-back. */
+      wingArea: 19.0, CL0: 0.42, CLalpha: 5.5, aoaStall: 0.30, CLmax: 1.55,
+      aoaTrim: 0.06,
+      span: 11.8, oswald: 0.80, CD0: 0.026,
+      Vref: 44,
+      aoaCmdFrac: 0.6,
+      /** Calm, stable pitch — a touring aeroplane. */
+      pitchElev: 1.0, pitchStab: 1.6, pitchDamp: 2.7,
+      /** Moderate roll with a firm dihedral: it tracks like a rail. */
+      rollAuth: 1.5, rollStab: 0.42, rollDamp: 2.6,
+      yawStab: 1.9, yawDamp: 1.7, rudder: 0.5,
+      groundSteer: 1.0,
+      /** Gear stiffened for 2.1 t. */
+      gearK: 340000, gearC: 36000, muRoll: 0.03, muBrake: 0.8, muLat: 0.95,
+      pedBlockAlt: 2.2,
+    },
+    /** SHIFT winds the throttle lever up, SPACE winds it down. See `plane.js`. */
+    boost: { kind: 'throttle', torque: 1 },
+    paints: ['twinair'],
+    style: {
+      shape: 'plane',
+      /** TWO wing-mounted engines instead of a nose prop. See `buildPlaneBody`. */
+      engines: 'twin',
+      /** Belly and fin top — the collision probe ring. */
+      groundY: 0.85,
+      roofY: 2.9,
+      hwMax: 0.70,
+      fuseZ0: -4.6, fuseZ1: 4.4, fuseY: 1.15, fuseR: 0.72, noseZ: 4.6,
+      /** A long six-seat cabin. */
+      cabinZ0: 0.6, cabinZ1: 3.4, cabinY0: 1.26, cabinY1: 2.12, floorY: 1.02,
+      /** Seating fields for the generic `seatAnchor` path — see the Skylark. */
+      sillY: 0.30, beltY: 1.36, cowlZ: 3.40,
+      /** A clean low wing, cantilever (no struts), carrying the nacelles. */
+      wingY: 0.88, wingZ: 0.7, wingSpan: 11.8, wingChord: 1.9, wingThick: 0.24,
+      finZ: -4.3, finY0: 1.4, finY1: 2.86, finChord: 1.35,
+      stabZ: -4.18, stabSpan: 4.4, stabChord: 1.0,
+      /** Tricycle gear under the fuselage. */
+      gearNoseZ: 3.2, gearMainZ: -0.3, gearX: 1.5, gearWheelR: 0.32, gearY: 0.0,
+      /** Prop geometry per nacelle (used by the twin branch, not the nose). */
+      propZ: 4.6, propR: 0.9, propBlades: 3,
+      /**
+       * NACELLES. One each side on the wing: a cowling tube of radius `r` and
+       * length `len` centred at (`x`, wingY, `z`), a spinner and a spinning
+       * three-blade prop at `propZ`. Read only by `buildPlaneBody`'s twin branch.
+       */
+      nacelle: { x: 2.05, z: 1.35, r: 0.42, len: 2.3, propZ: 2.65, propR: 0.95 },
+      headlight: { w: 0.11, h: 0.10, y: 0.95, inset: 0, kind: 'round' },
+      taillight: { w: 0.07, h: 0.07, y: 2.7, inset: 0, kind: 'round' },
+    },
+  },
+
   /* -------------------------------------------------------- tank ---- */
   /**
    * THE BULWARK — a tracked main battle tank. `kind: 'tank'` takes the CAR
@@ -2417,6 +2649,18 @@ export const VEHICLE_SPECS = {
       span: 9.6, oswald: 0.7, CD0: 0.021,
       Vref: 85,
       pitchElev: 1.35, pitchStab: 1.5, pitchDamp: 2.6,
+      /**
+       * A FIGHTER KEEPS ITS RAW PULL. The civil aeroplanes route full back-stick
+       * through `plane.js`'s speed-priority climb servo — a bounded ~15 deg
+       * attitude with an airspeed floor, the GTA-V "pull back and settle into a
+       * pleasant climb" bar. That is exactly wrong for an interceptor, which is
+       * meant to stand on its tail and loop, and whose AI pursuit needs the
+       * authority to follow a climbing target. `speedProtect: false` leaves the
+       * jet's nose-up on the raw aggressive elevator — byte-identical to before
+       * the civil-climb fix — so neither the player's jet nor the Ridgeline
+       * chase (gated by `airbaseprobe`) shifts a millimetre.
+       */
+      speedProtect: false,
       /** The fighter roll: nearly 3x the Slipstream's authority. */
       rollAuth: 3.6, rollStab: 0.20, rollDamp: 2.2,
       yawStab: 1.7, yawDamp: 1.6, rudder: 0.5,

@@ -99,6 +99,10 @@ export function buildPlaneBody(spec, lod = 0) {
   const lamp = (k, g) => (out.lamps[k] = out.lamps[k] ?? []).push(g);
 
   const fy = s.fuseY;
+  // A TWIN carries its engines on the wing, not the nose: a clean pointed nose
+  // and a nacelle with a spinning prop each side. Every other airframe keeps
+  // the single nose prop. See the Meridian's spec block.
+  const twin = s.engines === 'twin';
 
   /* ---- fuselage ------------------------------------------------------ */
   // A tapered tube: a fat cabin section that tapers to the tail cone, drawn as
@@ -114,9 +118,16 @@ export function buildPlaneBody(spec, lod = 0) {
     0.5, seg.ring, 1);
   transform(cowl, { pos: [0, fy, s.noseZ - 0.25], rot: [Math.PI * 0.5, 0, 0] });
   out.paint.push(cowl);
-  const spinner = new THREE.ConeGeometry(0.16, 0.34, Math.max(6, seg.ring >> 1));
-  transform(spinner, { pos: [0, fy, s.propZ + 0.04], rot: [-Math.PI * 0.5, 0, 0] });
-  out.chrome.push(spinner);
+  if (twin) {
+    // A pointed radome nose where the single-engine spinner/prop would be.
+    const nose = new THREE.ConeGeometry(s.fuseR * 0.72, 0.9, seg.ring);
+    transform(nose, { pos: [0, fy, s.noseZ + 0.2], rot: [-Math.PI * 0.5, 0, 0] });
+    out.paint.push(nose);
+  } else {
+    const spinner = new THREE.ConeGeometry(0.16, 0.34, Math.max(6, seg.ring >> 1));
+    transform(spinner, { pos: [0, fy, s.propZ + 0.04], rot: [-Math.PI * 0.5, 0, 0] });
+    out.chrome.push(spinner);
+  }
 
   /* ---- cabin glazing ------------------------------------------------- */
   if (lod < 3) {
@@ -213,21 +224,43 @@ export function buildPlaneBody(spec, lod = 0) {
     new THREE.SphereGeometry(s.headlight.w, 10, 7, 0, Math.PI * 2, 0, Math.PI * 0.5),
     { pos: [0, s.headlight.y, s.noseZ - 0.1], rot: [Math.PI * 0.5, 0, 0] }));
 
-  /* ---- propeller (its own node — it turns about z) ------------------- */
-  {
+  /* ---- propeller(s) (each its own node — turns about z) -------------- */
+  // A hub-and-blades disc, built at the origin so `build.js` can place it on a
+  // pivot and spin it about z. One on the nose for a single, one per nacelle
+  // for the twin.
+  const makeProp = (radius) => {
     const parts = [];
     const n = Math.max(2, s.propBlades | 0);
     const hub = new THREE.CylinderGeometry(0.08, 0.08, 0.12, 8);
     transform(hub, { rot: [Math.PI * 0.5, 0, 0] });
     parts.push(hub);
     for (let i = 0; i < n; i++) {
-      const b = propBlade(s.propR, 0.14, 0.03);
+      const b = propBlade(radius, 0.14, 0.03);
       // Lay the blade out along +Y, pitch it, then space it round the hub.
       transform(b, { rot: [0, 0.28, (i * Math.PI * 2) / n] });
       parts.push(b);
     }
+    return mergeAll(parts);
+  };
+
+  if (twin) {
+    const nc = s.nacelle;
+    for (const side of [-1, 1]) {
+      // A cowling nacelle slung under/over the wing, tapering to the spinner.
+      const nac = new THREE.CylinderGeometry(nc.r, nc.r * 0.7, nc.len, seg.ring, 1);
+      transform(nac, { pos: [side * nc.x, s.wingY, nc.z], rot: [Math.PI * 0.5, 0, 0] });
+      out.paint.push(nac);
+      const spin = new THREE.ConeGeometry(0.14, 0.3, Math.max(6, seg.ring >> 1));
+      transform(spin, { pos: [side * nc.x, s.wingY, nc.propZ + 0.04], rot: [-Math.PI * 0.5, 0, 0] });
+      out.chrome.push(spin);
+      out.rotors.push({
+        geo: makeProp(nc.propR), axis: 'z', material: 'trim',
+        pos: [side * nc.x, s.wingY, nc.propZ],
+      });
+    }
+  } else {
     out.rotors.push({
-      geo: mergeAll(parts), axis: 'z', material: 'trim',
+      geo: makeProp(s.propR), axis: 'z', material: 'trim',
       pos: [0, fy, s.propZ],
     });
   }
@@ -445,8 +478,15 @@ export function stepPlane(v, dt, ctx) {
   // kinds; `steer` already carries the auto-reverse sign a player driver is
   // given (D -> control.steer < 0), so reading it — and negating once here —
   // makes `ail > 0` mean "roll right" in both the game and the gate.
-  const elev = clamp((v.control.throttle ?? 0) - (v.control.brake ?? 0), -1, 1);
-  const ail = -clamp(v.control.steer ?? 0, -1, 1);
+  let elev = clamp((v.control.throttle ?? 0) - (v.control.brake ?? 0), -1, 1);
+  let ail = -clamp(v.control.steer ?? 0, -1, 1);
+  // NEGATIVE-CONTROL HOOKS. Off on every shipped path (undefined -> falsy); the
+  // aircraft probe sets them on a LIVE plane to prove its non-inversion checks
+  // actually measure the emitted sign. With a flip in, "press nose-up and the
+  // nose goes up" / "press roll-right and the right wing drops" MUST turn red —
+  // which is the whole point of a gate against inversion (ARCHITECTURE rule 12).
+  if (v.debugFlipPitch) elev = -elev;
+  if (v.debugFlipRoll) ail = -ail;
 
   const wPitch = v.angularVelocity.dot(_right);
   const wRoll = v.angularVelocity.dot(_fwd);
@@ -454,10 +494,94 @@ export function stepPlane(v, dt, ctx) {
   const bank = Math.atan2(_right.y, _up.y);
 
   // PITCH. Positive torque about +X pitches the nose DOWN (see heli.js's sign
-  // note). Elevator W (elev > 0) commands nose-down; the wing's static
-  // stability restores toward the trim AoA; a rate term damps it.
-  const noseDown =
-    (F.pitchElev * elev + F.pitchStab * (aoa - F.aoaTrim)) * dyn - F.pitchDamp * wPitch;
+  // note). Elevator W (elev > 0) commands nose-down; S (elev < 0) commands
+  // nose-up; the wing's static stability restores toward the trim AoA; a rate
+  // term damps it.
+  //
+  // The elevator is split into its two HALVES, because the two directions want
+  // opposite treatment. The nose-DOWN half (W, `dnCmd`) is a raw open-loop
+  // torque and is NEVER limited — pushing over into a dive is always available
+  // and always full authority. With `dnCmd`/`upCmd` and the static/damping
+  // terms alone, the block below is BYTE-IDENTICAL to the old plain elevator
+  // for every no-back-stick path: on the ground (aoa is 0 below flying speed),
+  // with nothing held, and under W. Only the nose-UP half changes.
+  const dnCmd = Math.max(0, elev);   // W — push, nose down (never limited)
+  const upCmd = Math.max(0, -elev);  // S — pull back, nose up (speed-protected)
+  let noseDown =
+    (F.pitchElev * dnCmd + F.pitchStab * (aoa - F.aoaTrim)) * dyn - F.pitchDamp * wPitch;
+
+  // The speed-priority climb is for the CIVIL aeroplanes — the trainer, the
+  // sport plane, the bush STOL and the twin — where the GTA-V bar is "pull back
+  // and settle into a pleasant bounded climb". A FIGHTER is not a trainer: it is
+  // meant to pull hard, loop and stand on its tail, and the interceptors in the
+  // Ridgeline pursuit need that authority to stay with a fleeing target. So a
+  // spec opts OUT with `flight.speedProtect: false` (the jet does), which leaves
+  // its nose-up path on the raw aggressive elevator — BYTE-IDENTICAL to before
+  // this change — so nothing that flies the jet (player or the chase AI) shifts.
+  const speedProtect = F.speedProtect !== false;
+  if (upCmd > 0 && speedProtect && !v.debugNoSpeedProtect) {
+    // SPEED-PRIORITY CLIMB — the whole fix for "pull back and it zooms over the
+    // top / bleeds to a stall / porpoises and augers in". A raw nose-up torque
+    // (the old model, and the AoA-envelope patch that only capped AoA and not
+    // the ZOOM) drove full back-stick to a vertical zoom: pitch ran past 60-88
+    // deg, the airspeed bled below the stall, the nose fell through and every
+    // plane went over the top or mushed onto the ground. Measured on all four.
+    //
+    // Full back-stick now commands a BOUNDED CLIMB ATTITUDE through an
+    // airspeed-scheduled servo, targeting the GTA-V feel: pull back and settle
+    // into a steady ~10-16 deg climb, never a loop. Two ideas, and both are
+    // load-bearing:
+    //
+    //   1. ATTITUDE LIMIT. `thetaCmd` caps the commanded nose-up pitch at
+    //      `climbPitchMax` (a pleasant climb angle), and the servo drives pitch
+    //      toward it and NO FURTHER — so however long S is held the nose cannot
+    //      run away past the limit, kill the zoom and the over-the-top.
+    //   2. AIRSPEED FLOOR. The limit is scaled by how much margin the wing has
+    //      above a floor set a healthy step over the stall (`climbVfloor`x the
+    //      reference speed). As airspeed decays toward the floor the commanded
+    //      climb fades to level, and BELOW the floor `spd` goes negative so the
+    //      servo actively lowers the nose to trade altitude back for speed. The
+    //      wing therefore always keeps flying — the climb self-limits at the
+    //      angle the thrust can SUSTAIN instead of the angle that stalls it.
+    //
+    // The servo carries its own damping on top of `pitchDamp`, which is what
+    // kills the porpoise. It is a pure function of the EMITTED body attitude
+    // and airspeed, so the gate that measures those is measuring the real loop.
+    const theta = Math.asin(clamp(_fwd.y, -1, 1));      // nose elevation, rad
+    const vFloor = F.Vref * (F.climbVfloor ?? 1.18);
+    // +1 as soon as the wing is a healthy step above the floor (so a climb has
+    // its FULL commanded attitude whenever it is safe), fading to 0 AT the floor
+    // and down to a bounded negative below it (nose down to recover speed). The
+    // band is narrow on purpose: the protection is a floor, not a throttle on
+    // the climb, so cutting power must not quietly cancel the pull-back.
+    const spd = clamp((V - vFloor) / (F.Vref * (F.climbBand ?? 0.22)), -0.7, 1);
+    const climbMax = F.climbPitchMax ?? 0.30;            // rad, ~17 deg cap
+    const thetaCmd = upCmd * climbMax * spd;
+    const kAtt = F.climbAtt ?? 5.0;                      // servo stiffness
+    const kDamp = F.climbDamp ?? 1.6;                    // extra pitch damping
+    // noseDown convention: pitch above the target -> push the nose back down.
+    noseDown += kAtt * (theta - thetaCmd) - kDamp * wPitch;
+  } else if (upCmd > 0 && v.debugNoSpeedProtect) {
+    // NEGATIVE CONTROL (mirrors `debugFlipPitch`): reproduce the PRIOR pass's
+    // broken climb — the open-loop nose-up faded only by the AoA envelope, the
+    // exact flight the old 9-12 s gate green-lit. Held, it zooms past the climb
+    // attitude, bleeds the airspeed below the stall and porpoises / goes over
+    // the top, so the strengthened gate has the real failure to catch. The
+    // aircraft probe flips this on to prove the gate is not decorative.
+    const aoaCmdMax = F.aoaTrim + (F.aoaCmdFrac ?? 0.62) * (F.aoaStall - F.aoaTrim);
+    const stallFrac = clamp((aoa - F.aoaTrim) / Math.max(0.02, aoaCmdMax - F.aoaTrim), 0, 1);
+    const upFade = 1 - stallFrac * stallFrac;
+    noseDown += -F.pitchElev * upCmd * upFade * dyn;
+  } else if (upCmd > 0) {
+    // A `speedProtect: false` airframe — the FIGHTER. The PLAIN signed elevator,
+    // BYTE-IDENTICAL to the original pre-climb-work model: with the base above
+    // this is `(pitchElev*(dnCmd - upCmd) + pitchStab*(aoa - aoaTrim))*dyn -
+    // pitchDamp*wPitch`, i.e. exactly `pitchElev*elev` with no envelope and no
+    // servo. The jet therefore stands on its tail and loops exactly as it always
+    // has, the player's fighter is unchanged, and the Ridgeline pursuit AI keeps
+    // every degree of pitch authority (gated by `airbaseprobe`).
+    noseDown += -F.pitchElev * upCmd * dyn;
+  }
   v.addTorque(_t.copy(_right).multiplyScalar(spec.inertia.x * noseDown));
 
   // ROLL about +Z. A positive torque about +Z rolls the aircraft LEFT (raises
