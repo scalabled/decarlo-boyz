@@ -222,6 +222,11 @@ export const AIRFIELDS = [
   { id: 'af_rivers', name: 'RIVERS FIELD', x: 1032, z: -784, runway: [512, 80], yaw: -0.42 },
 ];
 
+/** The pin sits on the MAIN GATE — the rest of the base is behind the wire. */
+export const MILITARY = [
+  { id: 'ab_ridge', name: 'RIDGELINE AFB', x: -321, z: -1166 },
+];
+
 /** The map's chokepoints — police close these first. */
 export const BRIDGES = [
   { id: 'br_fortduq', name: 'FORT DUQUESNE BRIDGE', a: [-405, -35], b: [-520, -370], kind: 'highway' },
@@ -283,6 +288,7 @@ export const POI_STYLE = {
   food: { c: '#ff8ab0', g: 'food', p: 3, label: 'FOOD — RESTORES HEALTH' },
   landmark: { c: '#9aa7b8', g: 'star', p: 3, label: 'LANDMARK' },
   airport: { c: '#5fd0ff', g: 'plane', p: 3, label: 'AIRFIELD' },
+  military: { c: '#8aa062', g: 'plane', p: 4, label: 'MILITARY BASE — RESTRICTED' },
   dock: { c: '#2ea6a0', g: 'boat', p: 3, label: 'BOAT DOCK' },
   bridge: { c: '#8894a4', g: 'bridge', p: 1, label: 'BRIDGE' },
   package: { c: '#ffe36e', g: 'pkg', p: 7, label: 'HIDDEN PACKAGE' },
@@ -306,6 +312,7 @@ export function buildPoiList() {
   for (const s of LANDMARKS) out.push({ x: s.x, z: s.z, kind: 'landmark', name: s.name });
   for (const s of DOCKS) out.push({ x: s.x, z: s.z, kind: 'dock', name: s.name });
   for (const s of AIRFIELDS) out.push({ x: s.x, z: s.z, kind: 'airport', name: s.name });
+  for (const s of MILITARY) out.push({ x: s.x, z: s.z, kind: 'military', name: s.name });
   for (const b of BRIDGES) {
     out.push({
       x: (b.a[0] + b.b[0]) * 0.5,

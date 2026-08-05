@@ -313,6 +313,12 @@ export class PedHostiles {
 
     for (let i = this.live.length - 1; i >= 0; i--) {
       const ped = this.live[i];
+      // `_noteKill` -> `onKill` hands control to game code that may despawn
+      // SEVERAL hostiles (or clear the wave) while this loop is mid-flight.
+      // Backwards iteration only survives removal of the current entry, so
+      // the slot can be gone by the time the cursor reaches it. A skipped
+      // ped is picked up next frame; a crash here took the whole frame loop.
+      if (!ped) continue;
       if (!ped.active) { this.live.splice(i, 1); continue; }
 
       if (!ped.alive) {

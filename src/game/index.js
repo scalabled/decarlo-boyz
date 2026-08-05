@@ -47,6 +47,7 @@ import { HostilePool } from './hostiles.js';
 import { PickupPool } from './pickups.js';
 import { MissionRunner, toScene } from './mission.js';
 import { FreeRoam } from './freeroam.js';
+import { AirbaseAssault } from './airbase.js';
 import { Director } from './director.js';
 import { Characters } from './characters.js';
 import { JobBoard } from './jobs.js';
@@ -183,6 +184,15 @@ export class GameSystem {
       missions: this.missions,
       save: this.save,
     });
+
+    // The Ridgeline AFB restricted-zone encounter — a free-roam module, not
+    // a chapter. It consumes the published `world.airbase` layout and winds
+    // down through `reset()` wherever `hostiles.clear()` is called.
+    this.airbase = new AirbaseAssault(ctx, {
+      wq: this.wq,
+      heat: this.heat,
+      hostiles: this.hostiles,
+    }).init();
 
     this.jobs = new JobBoard(ctx, {
       wq: this.wq,
@@ -671,6 +681,8 @@ export class GameSystem {
       p.health.armour = 0;
     }
     this.hostiles.clear();
+    // The base stands down with him: guards, turrets, pursuit jets.
+    this.airbase?.reset();
     const line = lost > 0 ? `They took ${money(lost)}` : 'They let you off';
     this.wq.ui?.titleCard?.(label, sh.name, restarting ? `${line} · The chapter restarts` : line);
     this._syncHud(1);
@@ -757,6 +769,9 @@ export class GameSystem {
     // pause menu is the same defect as abandoning a chapter from behind it.
     if (!paused) this.freeroam.update(dt);
     this.jobs.update(dt);
+    // Position-driven, reads no input — safe on either side of the pause
+    // gate (dt is 0 while paused, and no enter event can fire behind a menu).
+    this.airbase.update(dt);
     if (!paused) this._input(ctx);
     this._syncHud();
     this.writer.update(dt, this.save);
@@ -779,6 +794,7 @@ export class GameSystem {
     this._restartIdx = -1;
     this.missions.abort();
     this.hostiles.clear();
+    this.airbase?.reset();
     this.pickups.clearMission();
     this.heat.clear('restart');
     if (p?.inVehicle) p.vehicles?.abort?.(p.movement);
@@ -888,6 +904,7 @@ export class GameSystem {
     this.missions.abort();
     this.pickups.clear();
     this.hostiles.clear();
+    this.airbase?.reset();
     this.heat.clear('adopt');
 
     this.director.openWorld(save);
@@ -1040,6 +1057,7 @@ export class GameSystem {
         this.missions.abort();
         this.heat.clear();
         this.hostiles.clear();
+        this.airbase?.reset();
         ui?.clearObjective?.();
         ui?.clearPrompt?.();
         return { stage: 'clean' };
@@ -1192,6 +1210,7 @@ export class GameSystem {
       wantedOwner: this.heat.authoritative ? 'game' : 'police',
       cops: this.heat.cops.length,
       hostiles: this.hostiles.aliveCount,
+      airbase: this.airbase?.stats ?? null,
       pickups: this.pickups.live.length,
       mission: M ? { id: M.id, track: M.track, phase: M.phase, state: M.state, timer: +M.timer.toFixed(1), progress: M.progress, goal: M.goal } : null,
       unlocks: this.save.unlocks.slice(),
@@ -1204,6 +1223,7 @@ export class GameSystem {
     this.saveNow();
     this.missions?.dispose?.();
     this.characters?.dispose();
+    this.airbase?.dispose();
     this.freeroam?.dispose();
     this.director?.dispose();
     this.heat?.dispose();
