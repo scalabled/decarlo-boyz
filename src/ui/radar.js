@@ -32,6 +32,19 @@ import { POI_STYLE, buildPoiList, districtAt } from './data.js';
 const SPAN_IDLE = 190;
 const SPAN_FAST = 440;
 
+/**
+ * Negative-control hatch for the AFB findability gate (src/ui/afbprobe.mjs):
+ * `?nomilitary=1` drops the Ridgeline AFB pin from the minimap too, matching
+ * `pausemap.js` / `cheats.js`, so the probe's "blip when near" check measures
+ * PRESENCE and not a constant. No effect without the flag.
+ */
+function militaryHidden() {
+  if (typeof location === 'undefined') return false;
+  try {
+    return new URLSearchParams(location.search).get('nomilitary') === '1';
+  } catch { return false; }
+}
+
 export class SlagRing {
   constructor(parent, rng, ctx) {
     this.ctx = ctx;
@@ -54,6 +67,7 @@ export class SlagRing {
 
     this.map = new CityMap(rng);
     this.pois = buildPoiList();
+    if (militaryHidden()) this.pois = this.pois.filter((p) => p.kind !== 'military');
 
     this.k = 1;
     this.cssSize = 196;

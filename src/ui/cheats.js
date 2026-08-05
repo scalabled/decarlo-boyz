@@ -95,6 +95,19 @@ export function cheatsEnabled() {
   return true;
 }
 
+/**
+ * Negative-control hatch for the AFB findability gate (src/ui/afbprobe.mjs):
+ * `?nomilitary=1` hides Ridgeline AFB from the teleport list (and, in
+ * `pausemap.js`, from the map), so the probe can prove those checks measure
+ * PRESENCE and not a constant. Same shape as `cheatsEnabled()` — URL only.
+ */
+export function militaryHidden() {
+  if (typeof location === 'undefined') return false;
+  try {
+    return new URLSearchParams(location.search).get('nomilitary') === '1';
+  } catch { return false; }
+}
+
 /* ---------------------------------------------------------------- glyphs --- */
 
 /** Stroked 24x24 paths. No image assets exist in this project. */
@@ -833,7 +846,62 @@ export class CheatMenu {
     } catch (err) {
       console.warn('[cheats] map POI list failed', err);
     }
+
+    // Ridgeline AFB's map pin sits ON the gate, inside the wire (the base is a
+    // fenced restricted zone). A teleport must land on the drivable APPROACH
+    // outside it, or the tester drops onto the apron under fire and gets bounced
+    // to a safehouse. Rewrite the MILITARY row's destination to the reachable
+    // road — the map keeps its pin on the gate, the teleport takes you there.
+    const gateSpot = this._airbaseGateSpot();
+    if (gateSpot) {
+      for (const t of out) {
+        if (t.group === 'MILITARY') {
+          t.x = gateSpot.x;
+          t.z = gateSpot.z;
+          t.yaw = gateSpot.yaw;
+        }
+      }
+    }
+
+    // Negative-control hatch for src/ui/afbprobe.mjs — see `militaryHidden()`.
+    if (militaryHidden()) return out.filter((t) => t.group !== 'MILITARY');
     return out;
+  }
+
+  /**
+   * The drivable approach to Ridgeline AFB's main gate, OUTSIDE the wire.
+   *
+   * `world.airbase` publishes the gate and an `insidePerimeter` test. The gate
+   * pin sits on the fenced apron (inside the perimeter); the approach road runs
+   * up to it from outside. Rather than trust `roads.nearestEdge` — the gate is a
+   * node where the inside apron road and the outside approach road MEET, so the
+   * nearest-edge tie-break is arbitrary and can walk you deeper in — spiral out
+   * from the gate for the nearest drivable ground that is clear of the wire, and
+   * face the gate from there. Returns null (leaving the raw pin) if the airbase
+   * is off (`?noairbase=1`) or nothing drivable sits outside within reach.
+   */
+  _airbaseGateSpot() {
+    const world = this.ctx.peek('world');
+    const ab = world?.airbase;
+    const gate = ab?.gates?.[0];
+    if (!gate || typeof ab.insidePerimeter !== 'function' || typeof world.surfaceAt !== 'function') {
+      return null;
+    }
+    // Prefer the carriageway (asphalt) so a car teleports onto real road; take
+    // the kerb (sidewalk) only if no road sits outside the wire within reach.
+    let fallback = null;
+    for (let r = 8; r <= 90; r += 4) {
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        const x = gate.x + Math.cos(a) * r;
+        const z = gate.z + Math.sin(a) * r;
+        if (ab.insidePerimeter(x, z)) continue;
+        const s = world.surfaceAt(x, z);
+        if (s === 'asphalt') return { x, z, yaw: Math.atan2(gate.x - x, gate.z - z) };
+        if (s === 'sidewalk' && !fallback) fallback = { x, z, yaw: Math.atan2(gate.x - x, gate.z - z) };
+      }
+    }
+    return fallback;
   }
 
   _buildTeleport() {
@@ -868,7 +936,7 @@ export class CheatMenu {
         this._head(group);
       }
       this._row(t.name, `${t.x | 0}, ${t.z | 0}`, [
-        ['TELEPORT', () => this._teleport(t.x, t.z), true],
+        ['TELEPORT', () => this._teleport(t.x, t.z, t.yaw ?? null), true],
       ], { tag: t.group });
     }
   }

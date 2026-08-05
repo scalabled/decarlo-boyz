@@ -23,11 +23,24 @@ import {
 const MIN_PPM = 0.13;
 const MAX_PPM = 2.4;
 
+/**
+ * Negative-control hatch for the AFB findability gate (src/ui/afbprobe.mjs):
+ * `?nomilitary=1` drops the Ridgeline AFB pin so the probe can prove it is
+ * measuring the pin's PRESENCE, not asserting a constant. No effect otherwise.
+ */
+function militaryHidden() {
+  if (typeof location === 'undefined') return false;
+  try {
+    return new URLSearchParams(location.search).get('nomilitary') === '1';
+  } catch { return false; }
+}
+
 export class PauseMap {
   constructor(parent, cityMap, ctx) {
     this.ctx = ctx;
     this.map = cityMap;
     this.pois = buildPoiList();
+    if (militaryHidden()) this.pois = this.pois.filter((p) => p.kind !== 'military');
 
     this.root = el('div', 'ow-map', parent);
     this.canvas = el('canvas', 'ow-map-canvas', this.root);
@@ -44,8 +57,12 @@ export class PauseMap {
     this.legendRows = [];
     // Live contacts (mission, cops, hostiles, crew) sit at the top of the
     // legend because they are the rows that change what you do next.
+    // The restricted military base and the civilian airfields draw pins too, so
+    // their kinds need a legend key — without one the olive "RESTRICTED" plate
+    // near the north rim is an icon with nothing to explain it.
     for (const k of ['mission', 'cop', 'enemy', 'friend', 'safehouse', 'ammo',
-      'spray', 'food', 'gas', 'dock', 'landmark', 'race', 'package', 'waypoint']) {
+      'spray', 'food', 'gas', 'dock', 'airport', 'military', 'landmark',
+      'race', 'package', 'waypoint']) {
       const st = POI_STYLE[k];
       const row = el('div', 'lg', legend);
       const sw = el('i', null, row);
