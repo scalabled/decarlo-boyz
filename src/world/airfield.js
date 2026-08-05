@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Accum } from './util.js';
 import {
-  AIRFIELDS, ROAD_KIND, roadHalfWidth, clamp01, smootherstep, lerp,
+  AIRFIELDS, ROAD_KIND, roadHalfWidth, corridorHalfWidth, clamp01, smootherstep, lerp,
 } from './plan.js';
 
 /**
@@ -24,9 +24,8 @@ import {
  *      heightfield under each field, fitted to the terrain along the runway
  *      axis and clamped to a runway-plausible gradient. Runs INSIDE
  *      `generateCity`, after `orientLandmarkSites` and BEFORE a single
- *      corridor is laid, so every road that crosses the field solves its node
- *      heights against the graded bench and lies flat ON it — the strips
- *      sever nothing (railsweep/drivesweep stay green by construction).
+ *      corridor is laid, so the perimeter ring and anything skirting the
+ *      field solve their node heights against the graded bench.
  *   2. `buildAirfieldPaving(af, ...)` — the emitted geometry: a paved runway
  *      strip with centreline dashes, threshold stripes, painted heading
  *      numbers and edge lamps; two taxiway links; a parking apron sized so
@@ -41,17 +40,19 @@ import {
  * contract as `world.landmarks[].site` (ARCHITECTURE.md rule 12's spatial
  * corollary).
  *
- * ROADS ARE NOT CUT. Unlike the six landmarks, the fields do not reserve
- * their ground: cutting 20 corridors per field (one of them the Allegheny
- * Parkway, a highway) risks exactly the islanding `lmsweep` ratchets, and the
- * assignment's contract is that the strips must not sever roads or rails. So
- * where a drivable corridor crosses a paved rect the paving YIELDS: deck,
- * paint, lamp and collision quads inside the corridor (plus kerb and footway)
- * are dropped, the road keeps its own surface and collision, and the crossing
- * reads as an old city street cut across a working strip. The graded bench is
- * what keeps that crossing drivable at speed — road and runway share one
- * plane. `src/world/airsweep.mjs` gates the result, including rolling the
- * real flight model down the emitted collision.
+ * ROADS ARE DIVERTED, NOT CROSSED — a REVERSAL of this file's first design.
+ * The original strips let the grid run across the pavement as "level
+ * crossings", and an adversarial re-measure proved what that ships: a 6-lane
+ * parkway across the middle of Rivers Field, street-furniture colliders in
+ * the SKYLARK's roll lanes, and traffic + peds following the graph over an
+ * active runway. The fields now get the landmark treatment (see "the strip
+ * keep-out" below): streets cut back to a perimeter ring road they weld
+ * into, highways/arterials rerouted around the field, rowhouse blocks
+ * already dropped by `netgen`, and props excluded through the published
+ * `airfieldAt`. `corridorCutAt` still makes paving yield to any corridor
+ * that somehow reaches a paved rect — a belt behind the reserve's braces —
+ * and `src/world/airsweep.mjs` gates the emitted result, including rolling
+ * the real flight model down the emitted collision WITH props present.
  */
 
 /* ------------------------------------------------------------ constants -- */
@@ -74,6 +75,21 @@ const STEP = 8;
  * only fire after this has already failed.
  */
 const CUT_MARGIN = 0.9;
+/**
+ * Metres OUTSIDE the field rect where a cut street ends and where the
+ * perimeter ring road runs — the airfield's `LANDMARK_RESERVE`. Sized so a
+ * 2-lane street on the ring line keeps its whole corridor (half-width 3.6 +
+ * kerb 0.33 + footway 2.7 = 6.63) outside the fence with ~4 m to spare, and
+ * so the fence-post `clear()` slide in `buildings/airfield.js` (which needs
+ * ~9.3 m from a street centreline) still stands posts on the field boundary:
+ * 11 + 2 (post inset) = 13 > 9.33.
+ */
+const AF_RESERVE = 11;
+/** A surviving street fragment shorter than this is dropped, not kept. */
+const AF_MINKEEP = 34;
+/** Cut ends run this far past the ring line so the last segment CROSSES the
+ *  ring corridor and `buildGraph` makes a node there (netgen's `LM_SPUR`). */
+const AF_SPUR = 4;
 
 function afDisabled() {
   try {
@@ -336,6 +352,392 @@ export function levelAirfieldRoads(graph) {
       nd.y += (padY(af, lo.a) - nd.y) * w;
     }
   }
+}
+
+/* ------------------------------------------------- the strip keep-out ---- */
+/*
+ * A ROAD THROUGH AN ACTIVE RUNWAY IS WRONG. The original design let the city
+ * grids run across both strips ("deliberately uncut", level crossings), and
+ * the adversarial re-measure proved what that ships: a 6-lane parkway across
+ * the middle of Rivers Field, street furniture colliders standing in the
+ * SKYLARK's roll lanes, and traffic + peds following the graph straight over
+ * the pavement. The fix is the LANDMARK treatment, verbatim vocabulary
+ * (`reserveLandmarks` + `landmarkRings` + the dedupe merge-tapers), applied
+ * to the published FIELD rect:
+ *
+ *   - streets and alleys are CUT back to the `AF_RESERVE` isoline of the
+ *     field rect, each cut end running `AF_SPUR` past the ring line so its
+ *     last segment provably crosses the ring corridor and welds there —
+ *     nothing is left dangling, so `route()` still crosses the map and
+ *     lmsweep's connectivity share must not move;
+ *   - highways and arterials (the parkway, the quay) are NOT cut — a highway
+ *     dead-ending in a T is a wedge factory — they are REROUTED: the portion
+ *     of the polyline inside the keep-out is replaced by a walk along the
+ *     rounded-box isoline at the corridor's own half-section + margin,
+ *     around the nearer strip end (water-vetoed), so the corridor stays one
+ *     continuous welded piece and reads as a parkway bending around an
+ *     airfield perimeter;
+ *   - a perimeter RING road is laid on the `AF_RESERVE` isoline
+ *     (`landmarkRings`' rounded-box walk), so every cut street terminates in
+ *     a real junction; where a rerouted parkway runs beside the ring the
+ *     dedupe pass collapses the ring onto it with merge tapers, exactly as
+ *     designed.
+ *
+ * `src/world/airsweep.mjs` gates the emitted result: no drivable edge across
+ * the runway rect, no sidewalk band inside the wingtip corridor, prop
+ * colliders in the swept set, and the real SKYLARK taking off through it.
+ */
+
+/** Distance OUTSIDE the field rect of (x, z) for one field (0 inside). */
+function fieldRectDist(af, x, z) {
+  const f = af.layout.field;
+  afLocal(af, x, z, _lo);
+  const qa = Math.max(f.a0 - _lo.a, _lo.a - f.a1, 0);
+  const qd = Math.max(f.d0 - _lo.d, _lo.d - f.d1, 0);
+  return Math.hypot(qa, qd);
+}
+
+/** Min over both fields of `fieldRectDist` — the airfield `nearestSiteDist`. */
+export function airfieldReserveDist(x, z) {
+  let best = Infinity;
+  for (const af of AIRFIELDS) {
+    if (!af.pad) continue;
+    const d = fieldRectDist(af, x, z);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** Binary-search the `iso` crossing between an outside and an inside point. */
+function isoCross(af, pOut, pIn, iso) {
+  let lo = 0;
+  let hi = 1;
+  for (let k = 0; k < 22; k++) {
+    const m = (lo + hi) * 0.5;
+    const d = fieldRectDist(af, pOut[0] + (pIn[0] - pOut[0]) * m, pOut[1] + (pIn[1] - pOut[1]) * m);
+    if (d >= iso) lo = m;
+    else hi = m;
+  }
+  return [pOut[0] + (pIn[0] - pOut[0]) * lo, pOut[1] + (pIn[1] - pOut[1]) * lo];
+}
+
+/**
+ * Perimeter parameterisation of the rounded-box isoline at `iso` outside the
+ * field rect: four straight edges + four quarter-arcs of radius `iso`,
+ * walked CCW in field space. Returns { len, at(t, out) } with t in metres.
+ */
+function isoLoop(af, iso) {
+  const f = af.layout.field;
+  const aw = f.a1 - f.a0;
+  const dw = f.d1 - f.d0;
+  const arc = (Math.PI / 2) * iso;
+  // Segments: [+d edge (a0->a1)], corner, [a1 end (d1->d0)], corner,
+  // [-d edge (a1->a0)], corner, [a0 end (d0->d1)], corner.
+  const L = 2 * aw + 2 * dw + 4 * arc;
+  const at = (t, out = { a: 0, d: 0 }) => {
+    t = ((t % L) + L) % L;
+    if (t < aw) { out.a = f.a0 + t; out.d = f.d1 + iso; return out; }
+    t -= aw;
+    if (t < arc) {
+      const th = t / iso;
+      out.a = f.a1 + Math.sin(th) * iso;
+      out.d = f.d1 + Math.cos(th) * iso;
+      return out;
+    }
+    t -= arc;
+    if (t < dw) { out.a = f.a1 + iso; out.d = f.d1 - t; return out; }
+    t -= dw;
+    if (t < arc) {
+      const th = t / iso;
+      out.a = f.a1 + Math.cos(th) * iso;
+      out.d = f.d0 - Math.sin(th) * iso;
+      return out;
+    }
+    t -= arc;
+    if (t < aw) { out.a = f.a1 - t; out.d = f.d0 - iso; return out; }
+    t -= aw;
+    if (t < arc) {
+      const th = t / iso;
+      out.a = f.a0 - Math.sin(th) * iso;
+      out.d = f.d0 - Math.cos(th) * iso;
+      return out;
+    }
+    t -= arc;
+    if (t < dw) { out.a = f.a0 - iso; out.d = f.d0 + t; return out; }
+    t -= dw;
+    const th = (t) / iso;
+    out.a = f.a0 - Math.cos(th) * iso;
+    out.d = f.d0 + Math.sin(th) * iso;
+    return out;
+  };
+  return { len: L, at };
+}
+
+/** Perimeter parameter (metres) of the loop point nearest (x, z). */
+function isoParamOf(af, loop, x, z) {
+  let best = 0;
+  let bd = Infinity;
+  const o = { a: 0, d: 0 };
+  const w = { x: 0, z: 0 };
+  for (let t = 0; t < loop.len; t += 6) {
+    loop.at(t, o);
+    afWorld(af, o.d, o.a, w);
+    const d = (w.x - x) * (w.x - x) + (w.z - z) * (w.z - z);
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+
+/**
+ * The boundary walk from perimeter param t0 to t1, the shorter way unless
+ * that way is vetoed by water. Emits points every ~22 m, endpoints included.
+ */
+function isoWalk(af, loop, t0, t1, terrain) {
+  const o = { a: 0, d: 0 };
+  const w = { x: 0, z: 0 };
+  const path = (dir) => {
+    let span = dir > 0 ? t1 - t0 : t0 - t1;
+    span = ((span % loop.len) + loop.len) % loop.len;
+    const n = Math.max(2, Math.ceil(span / 22));
+    const pts = [];
+    let wet = false;
+    for (let i = 0; i <= n; i++) {
+      loop.at(t0 + dir * (span * i) / n, o);
+      afWorld(af, o.d, o.a, w);
+      if (terrain.waterDist(w.x, w.z) < 14) wet = true;
+      pts.push([w.x, w.z]);
+    }
+    return { pts, wet, span };
+  };
+  const fwd = path(1);
+  const bck = path(-1);
+  const pick = (fwd.wet === bck.wet) ? (fwd.span <= bck.span ? fwd : bck) : (fwd.wet ? bck : fwd);
+  return pick.pts;
+}
+
+/**
+ * Cut streets/alleys out of the strip reserve and REROUTE highways/arterials
+ * around it. Runs on corridor polylines (netgen step 7c3), after the airbase
+ * reserve and before the dedupe, exactly where `reserveLandmarks` runs.
+ * Exempt: bridges, pinned decks, rail (must not be severed), the airbase's
+ * own `abx_` road, and anything when the `?noairfield=1` hatch is up.
+ */
+export function reserveAirfieldStrips(corridors, terrain) {
+  const active = AIRFIELDS.filter((af) => af.pad && af.layout);
+  if (!active.length) return { corridors, on: false, cut: 0, rerouted: 0, dropped: 0 };
+  let cut = 0;
+  let rerouted = 0;
+  let dropped = 0;
+  let work = corridors;
+  for (const af of active) {
+    const out = [];
+    for (const c of work) {
+      if (c.bridge || c.y || c.pin || c.rail || String(c.id).startsWith('abx_')) {
+        out.push(c);
+        continue;
+      }
+      const wantReroute = c.kind === 'highway' || c.kind === 'arterial';
+      // A rerouted corridor keeps its whole section outside the fence — the
+      // +8 covers the graph simplifier chording the walk's corner arcs
+      // (measured 1.7-3.2 m of sag) plus shoulder room; a cut street stops
+      // on the AF_RESERVE ring line.
+      const isoFor = (rr) => (rr ? corridorHalfWidth(c.kind, c.lanes) + 8 : AF_RESERVE);
+      const isoMax = isoFor(wantReroute);
+      const n = c.pts.length;
+      let anyIn = false;
+      for (let i = 0; i < n && !anyIn; i++) {
+        if (fieldRectDist(af, c.pts[i][0], c.pts[i][1]) < isoMax) anyIn = true;
+      }
+      // Points can straddle the rect corner with both ends outside: also test
+      // segment midpoints so a coarse polyline cannot thread the keep-out.
+      if (!anyIn) {
+        for (let i = 0; i < n - 1 && !anyIn; i++) {
+          const mx = (c.pts[i][0] + c.pts[i + 1][0]) / 2;
+          const mz = (c.pts[i][1] + c.pts[i + 1][1]) / 2;
+          if (fieldRectDist(af, mx, mz) < isoMax) anyIn = true;
+        }
+      }
+      if (!anyIn) {
+        out.push(c);
+        continue;
+      }
+      // Resample to <= 8 m so inside runs are found precisely.
+      const pts = [];
+      for (let i = 0; i < n - 1; i++) {
+        const a = c.pts[i];
+        const b = c.pts[i + 1];
+        const segN = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 8));
+        for (let k = 0; k < segN; k++) {
+          pts.push([a[0] + ((b[0] - a[0]) * k) / segN, a[1] + ((b[1] - a[1]) * k) / segN]);
+        }
+      }
+      pts.push(c.pts[n - 1].slice());
+
+      /**
+       * REROUTE attempt (highways/arterials): replace each inside run with the
+       * boundary walk between its anchors. A corridor whose walk would enter
+       * water falls back to the CUT treatment — the ground between a strip and
+       * a river is where the quay genuinely ends, not where a road detours
+       * (measured: the first quay walk here was 25 m INTO the Allegheny).
+       * A run with no anchor on one side follows its own authored path to
+       * just past the AF_RESERVE ring line, so the dead end WELDS into the
+       * ring instead of stopping short of it (measured: a parkway fragment
+       * truncated 10 m shy of the ring was a 6-node island).
+       */
+      let rerouted1 = false;
+      if (wantReroute) {
+        const iso = isoFor(true);
+        const inn = pts.map((p) => fieldRectDist(af, p[0], p[1]) < iso);
+        const loop = isoLoop(af, iso);
+        const res = [];
+        let i = 0;
+        let changed = false;
+        let wet = false;
+        while (i < pts.length) {
+          if (!inn[i]) {
+            res.push(pts[i]);
+            i++;
+            continue;
+          }
+          changed = true;
+          let j = i;
+          while (j < pts.length && inn[j]) j++;
+          const hasIn = i > 0;
+          const hasOut = j < pts.length;
+          if (hasIn && hasOut) {
+            const pin = isoCross(af, pts[i - 1], pts[i], iso);
+            const pout = isoCross(af, pts[j], pts[j - 1], iso);
+            const walk = isoWalk(af, loop,
+              isoParamOf(af, loop, pin[0], pin[1]),
+              isoParamOf(af, loop, pout[0], pout[1]), terrain);
+            for (const p of walk) {
+              if (terrain.waterDist(p[0], p[1]) < 14) wet = true;
+              res.push(p);
+            }
+          } else if (hasIn) {
+            // Tail ends inside: keep the authored path to past the ring line.
+            for (let k = i; k < pts.length; k++) {
+              res.push(pts[k]);
+              if (fieldRectDist(af, pts[k][0], pts[k][1]) < AF_RESERVE - AF_SPUR) break;
+            }
+          } else if (hasOut) {
+            // Head starts inside: from just past the ring line outward.
+            let k0 = j - 1;
+            for (; k0 >= 0; k0--) {
+              if (fieldRectDist(af, pts[k0][0], pts[k0][1]) < AF_RESERVE - AF_SPUR) break;
+            }
+            for (let k = Math.max(0, k0); k < j; k++) res.push(pts[k]);
+          }
+          i = j;
+        }
+        if (!wet) {
+          if (changed) rerouted++;
+          rerouted1 = true;
+          if (res.length >= 2) out.push({ ...c, pts: res });
+          else dropped++;
+        }
+      }
+      if (rerouted1) continue;
+
+      // Streets, alleys, and wet-walk fallbacks: the reserveLandmarks cut,
+      // ends spurred past the ring line so they weld into the ring corridor.
+      {
+        const iso = AF_RESERVE;
+        const inn = pts.map((p) => fieldRectDist(af, p[0], p[1]) < iso);
+        const runs = [];
+        let i = 0;
+        while (i < pts.length) {
+          if (inn[i]) {
+            i++;
+            continue;
+          }
+          let j = i;
+          while (j < pts.length && !inn[j]) j++;
+          const run = pts.slice(i, j).map((p) => p.slice());
+          if (i > 0) run.unshift(spurEnd(af, pts[i], pts[i - 1], iso));
+          if (j < pts.length) run.push(spurEnd(af, pts[j - 1], pts[j], iso));
+          if (run.length >= 2 && pathLen(run) >= AF_MINKEEP) runs.push(run);
+          else dropped++;
+          i = j;
+        }
+        cut++;
+        for (let k = 0; k < runs.length; k++) {
+          out.push({ ...c, id: runs.length > 1 ? `${c.id}~af${k}` : c.id, pts: runs[k] });
+        }
+      }
+    }
+    work = out;
+  }
+  return { corridors: work, on: true, cut, rerouted, dropped };
+}
+
+function pathLen(pts) {
+  let l = 0;
+  for (let i = 0; i < pts.length - 1; i++) l += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  return l;
+}
+
+/** The point `AF_SPUR` past the `iso` crossing, toward the inside. */
+function spurEnd(af, pOut, pIn, iso) {
+  const x = isoCross(af, pOut, pIn, iso);
+  const dx = pIn[0] - pOut[0];
+  const dz = pIn[1] - pOut[1];
+  const l = Math.hypot(dx, dz) || 1;
+  return [x[0] + (dx / l) * AF_SPUR, x[1] + (dz / l) * AF_SPUR];
+}
+
+/**
+ * The perimeter ring corridors — `landmarkRings` for the strips: one 2-lane
+ * street per field on the `AF_RESERVE` isoline, water-clipped, so every cut
+ * street terminates in a junction and the field reads as fenced ground with
+ * a perimeter road. Emitted with the landmark rings' priority so the dedupe
+ * lets a rerouted parkway absorb the flank it runs along.
+ */
+export function airfieldRingCorridors(terrain) {
+  const out = [];
+  for (const af of AIRFIELDS) {
+    if (!af.pad || !af.layout) continue;
+    const loop = isoLoop(af, AF_RESERVE);
+    const o = { a: 0, d: 0 };
+    const w = { x: 0, z: 0 };
+    const pts = [];
+    const n = Math.ceil(loop.len / 20);
+    for (let i = 0; i <= n; i++) {
+      loop.at((loop.len * i) / n, o);
+      afWorld(af, o.d, o.a, w);
+      pts.push([w.x, w.z]);
+    }
+    // Water/map-edge clip into dry runs (clipToLand's shape, local).
+    const runs = [];
+    let cur = null;
+    for (const p of pts) {
+      const ok = Math.abs(p[0]) < 1420 && Math.abs(p[1]) < 1420 && terrain.waterDist(p[0], p[1]) > 14;
+      if (ok) {
+        if (!cur) runs.push((cur = []));
+        cur.push(p);
+      } else cur = null;
+    }
+    let k = 0;
+    for (const r of runs) {
+      if (r.length < 2 || pathLen(r) < 40) continue;
+      out.push({
+        id: runs.length > 1 ? `ring_${af.id}_${k++}` : `ring_${af.id}`,
+        name: `${af.name} Perimeter`,
+        kind: 'street',
+        lanes: 2,
+        oneway: false,
+        pri: 4.5, // PRI.ring — the road every cut street merges into
+        pts: r,
+        y: null,
+        pin: null,
+        bridge: false,
+        bridgeId: null,
+        district: null,
+        rail: false,
+      });
+    }
+  }
+  return out;
 }
 
 /* -------------------------------------------------------------- paving --- */

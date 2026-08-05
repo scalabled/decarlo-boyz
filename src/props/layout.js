@@ -875,6 +875,9 @@ export class Layout {
       const wx = na.x + (nb.x - na.x) * t - edge.dz * lat + (hash3i(p.seed, 51, 1) - 0.5) * 5;
       const wz = na.z + (nb.z - na.z) * t + edge.dx * lat + (hash3i(p.seed, 52, 1) - 0.5) * 5;
       if (this.world.isWater?.(wx, wz)) continue;
+      // A service drop needs a WALL. Across the footway of an airfield's
+      // perimeter road there is only the fence and the open field.
+      if (this._onAirfield(wx, wz)) continue;
       const wy = p.y + 4.4 + hash3i(p.seed, 53, 1) * 2.6;
       const yaw = this._facing(edge, p.side) + Math.PI;
       B.put('wire_bracket', trs(new THREE.Matrix4(), wx, wy, wz, yaw), [0.7, 0.8, 0.5]);
@@ -1814,6 +1817,27 @@ export class Layout {
   }
 
   /**
+   * AN AIRFIELD IS OPEN GROUND — the same rule `world/netgen` applies to
+   * rowhouse blocks ("no block on the bench"), applied to everything this
+   * file places. The two civilian strips and Ridgeline AFB publish their
+   * field rects through `world.airfieldAt` / `world.airbaseAt`; anything
+   * standing inside one is inside the fence, and anything inside the runway
+   * roll lanes is what the SKYLARK's wing meets on its take-off run —
+   * measured before this guard: 232 street-furniture colliders in
+   * af_county's roll corridor, 166 in af_rivers'. Consulted by `_clearOff`
+   * and `_clearsLanes`, which every placement family funnels through.
+   *
+   * `debugIgnoreAirfields` is the live-code negative-control hatch (the
+   * `debugIgnorePause` pattern): `airsweep` flips it to prove the guard is
+   * what keeps the strip clean, without editing production code.
+   */
+  _onAirfield(x, z) {
+    if (this.debugIgnoreAirfields) return false;
+    const w = this.world;
+    return !!(w.airfieldAt?.(x, z) || w.airbaseAt?.(x, z));
+  }
+
+  /**
    * FINAL GUARD: does a thing standing here clear every lane a driver may use?
    *
    * `parksOn` reasons about ONE edge, and that is not enough in a real graph —
@@ -1832,6 +1856,7 @@ export class Layout {
    * `_clearOff` / `_clearsLanes`.
    */
   _clearsLanes(x, y, z, clearance) {
+    if (this._onAirfield(x, z)) return false;
     return this.laneIntrusion(x, y, z, clearance) <= 0;
   }
 
@@ -1959,6 +1984,9 @@ export class Layout {
     const near = this._nearEdgesFor(edge);
     for (let o = off; o <= maxOff + 1e-6; o += 0.25) {
       this._pos(edge, s, side, o, out);
+      // Pushing outward cannot get a prop OFF an airfield — the field is on
+      // the far side of the kerb — so this side of the street stays bare.
+      if (this._onAirfield(out.x, out.z)) return null;
       if (this.laneIntrusion(out.x, out.y, out.z, clearance, near) <= 0) return out;
     }
     return null;

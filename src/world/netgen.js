@@ -5,7 +5,10 @@ import {
   corridorHalfWidth, roadHalfWidth, clamp01, smoothstep, smootherstep, lerp, segDist2,
   nearestSiteDist,
 } from './plan.js';
-import { gradeAirfields, airfieldAt, levelAirfieldRoads } from './airfield.js';
+import {
+  gradeAirfields, airfieldAt, levelAirfieldRoads,
+  reserveAirfieldStrips, airfieldRingCorridors,
+} from './airfield.js';
 import {
   gradeAirbase, airbaseAt, levelAirbaseRoads, reserveAirbase, airbaseAccessCorridors,
 } from './airbase.js';
@@ -817,10 +820,10 @@ export function generateCity(terrain, rng) {
   orientLandmarkSites(terrain);
 
   /* ---- 0b. bench the two airfields into the heightfield ----------------- */
-  // BEFORE any corridor is laid, so a road crossing a field solves its node
-  // heights against the graded bench and lies flat ON it — the runway can
-  // then coexist with the street grid instead of reserving 600 x 140 m of
-  // city. See `src/world/airfield.js`.
+  // BEFORE any corridor is laid, so the perimeter ring and everything
+  // skirting a field solve their node heights against the graded bench.
+  // Roads no longer cross the strips — step 7c3 cuts/reroutes them (see
+  // `reserveAirfieldStrips` in `src/world/airfield.js`).
   const airfieldGrade = gradeAirfields(terrain);
 
   /* ---- 0c. bench the military airbase --------------------------------- */
@@ -941,8 +944,18 @@ export function generateCity(terrain, rng) {
   const withBase = abr.corridors;
   if (airbaseGrade.on) for (const c of airbaseAccessCorridors()) withBase.push(c);
 
+  /* ---- 7c3. no drivable road across a runway strip ---------------------- */
+  // The landmark treatment for the two civilian fields: streets are cut back
+  // to the AF_RESERVE ring line (spurred so they weld into the ring), the
+  // parkway/quay are rerouted around the field, and a perimeter ring road is
+  // laid for the cut ends to merge into. See `reserveAirfieldStrips` in
+  // `./airfield.js`; `src/world/airsweep.mjs` gates the emitted graph.
+  const afr = reserveAirfieldStrips(withBase, terrain);
+  const withFields = afr.corridors;
+  if (afr.on) for (const c of airfieldRingCorridors(terrain)) withFields.push(c);
+
   /* ---- 7d. one piece of ground, one road ------------------------------- */
-  const dd = dedupeCorridors(withBase, terrain);
+  const dd = dedupeCorridors(withFields, terrain);
 
   /* ---- 8. solve the planar graph --------------------------------------- */
   const graph = buildGraph(dd.corridors, terrain);

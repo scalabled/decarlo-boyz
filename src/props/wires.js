@@ -199,6 +199,10 @@ export function polesOnEdge(graph, edge, world, styleOf, out = []) {
     // --- the culls. A pole that fails any of these does not exist, and its
     // --- two spans go with it.
     if (world.isWater?.(x, z)) continue;
+    // An airfield is open ground (the block rule in `world/netgen`): no pole
+    // stands inside a strip's field rect, and no span crosses it, because a
+    // 10 m pole beside a runway is the first thing a wing meets.
+    if (world.airfieldAt?.(x, z) || world.airbaseAt?.(x, z)) continue;
     const st = styleOf(x, z);
     if (!st || st.wires <= 0.05) continue;
     const seed = (eSeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0;

@@ -25,13 +25,17 @@ import { Kit } from './kit.js';
  * coordinates: `a` runs along the runway (+a is the take-off run), `d`
  * across it (+d is the apron side — where `game/freeroam` parks the heli).
  *
- * ROADS. The city street grid crosses both fields (deliberately uncut — see
- * `world/airfield.js`), so every structure placement is checked against the
- * emitted road graph and slid along the field until clear; the tile-builder
- * kerb keep-out then stands behind that as belt-and-braces. Collision shells
- * are authored with every mass (`T.box`) — the mill shipped as smoke once
- * (`solidprobe` measured 10 of 14 bearings open) and no archetype repeats
- * that here. `src/world/airsweep.mjs` fires rays at the emitted shells.
+ * ROADS. The city grid is now DIVERTED around both fields (`world`'s strip
+ * keep-out — streets cut back to a perimeter ring, highways rerouted), so
+ * the fence closes and no corridor crosses the pavement. Every structure
+ * placement is still checked against the emitted road graph and slid along
+ * the field until clear — the perimeter ring runs just outside the fence
+ * line, and a guard that only fires when something is wrong is exactly what
+ * should stay armed; the tile-builder kerb keep-out stands behind it as
+ * belt-and-braces. Collision shells are authored with every mass (`T.box`)
+ * — the mill shipped as smoke once (`solidprobe` measured 10 of 14 bearings
+ * open) and no archetype repeats that here. `src/world/airsweep.mjs` fires
+ * rays at the emitted shells.
  */
 
 const _m = new THREE.Matrix4();

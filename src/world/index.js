@@ -12,9 +12,9 @@ import { subdivide, resetLotIds } from './lots.js';
 import { RoadMeshBuilder, noGapFix } from './roadmesh.js';
 import { Water } from './water.js';
 import { buildBridges } from './bridges.js';
-import { buildAirfieldPaving, airfieldPavedAt, airfieldDeckAt } from './airfield.js';
+import { buildAirfieldPaving, airfieldPavedAt, airfieldDeckAt, airfieldAt } from './airfield.js';
 import {
-  buildAirbasePaving, airbasePavedAt, airbaseDeckAt, finaliseAirbase,
+  buildAirbasePaving, airbasePavedAt, airbaseDeckAt, finaliseAirbase, airbaseAt,
 } from './airbase.js';
 import { AIRBASE } from './plan.js';
 import { JobQueue, RingTracker } from './streaming.js';
@@ -458,6 +458,17 @@ export class WorldSystem {
     this.rivers = RIVERS;
     this.bridges = BRIDGES;
     this.airfields = AIRFIELDS;
+    /**
+     * "Is (x, z) on an airfield's FIELD?" — the published form of the same
+     * rect `netgen` uses to drop rowhouse blocks off the bench ("an airfield
+     * is open ground"). `props` consults these so street furniture, poles and
+     * scatter follow the same rule as the blocks: nothing stands inside the
+     * fence, and in particular nothing stands in the SKYLARK's roll lanes.
+     * Both answer null/falsy while the `?noairfield=1` / `?noairbase=1`
+     * hatches are up, exactly like every other published airfield fact.
+     */
+    this.airfieldAt = airfieldAt;
+    this.airbaseAt = airbaseAt;
     /**
      * THE PUBLISHED AIRBASE — Ridgeline AFB. `finaliseAirbase` attaches the
      * world-space perimeter polygon, gates (drivable gaps), runway start +
