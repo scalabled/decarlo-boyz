@@ -358,22 +358,26 @@ function testPlane() {
   /* ---- roll / yaw: A/D bank it and swing the heading, coordinated --- */
   {
     const base = () => { const v = spawn('plane'); fly(v, { boost: 1 }, 18); return v; };
-    // D (steer +1). With the auto-reverse sign that is a roll RIGHT: the right
-    // wing drops (bank < 0) and the heading swings right (heading increases).
+    // This gate spawns a PLAYER at the controls (`autoReverse = true`, above) to
+    // keep the A/D roll direction identical in the gate and in the game — so it
+    // tracks the PLAYER ROLL SWAP in plane.js. For a human pilot D now banks the
+    // plane the SAME way the helicopter does (the un-inverted direction the
+    // player asked for): D (steer +1) rolls LEFT — the left wing drops (bank > 0)
+    // and the heading swings left (heading decreases).
     const rt = base(); const hR0 = headingOf(rt);
     fly(rt, { boost: 0.6, steer: 1 }, 1.2);
     const bankR = bankOf(rt), dHR = headingOf(rt) - hR0, slipR = sideslip(rt);
-    // A (steer -1): roll LEFT — bank > 0, heading swings left.
+    // A (steer -1): roll RIGHT — bank < 0, heading swings right.
     const lf = base(); const hL0 = headingOf(lf);
     fly(lf, { boost: 0.6, steer: -1 }, 1.2);
     const bankL = bankOf(lf), dHL = headingOf(lf) - hL0;
 
-    check('plane', 'D rolls right and the heading swings right',
-      bankR < -0.12 && dHR > 0.05,
-      `bank ${(bankR * DEG).toFixed(1)} deg, heading +${(dHR * DEG).toFixed(1)} deg`);
-    check('plane', 'A rolls left and the heading swings left',
-      bankL > 0.12 && dHL < -0.05,
-      `bank ${(bankL * DEG).toFixed(1)} deg, heading ${(dHL * DEG).toFixed(1)} deg`);
+    check('plane', 'D rolls left and the heading swings left (the swapped player direction)',
+      bankR > 0.12 && dHR < -0.05,
+      `bank ${(bankR * DEG).toFixed(1)} deg, heading ${(dHR * DEG).toFixed(1)} deg`);
+    check('plane', 'A rolls right and the heading swings right',
+      bankL < -0.12 && dHL > 0.05,
+      `bank ${(bankL * DEG).toFixed(1)} deg, heading +${(dHL * DEG).toFixed(1)} deg`);
     check('plane', 'the banked turn stays coordinated (sideslip bounded)',
       Math.abs(slipR) < 25 / DEG,
       `sideslip ${(slipR * DEG).toFixed(1)} deg`);

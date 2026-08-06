@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AIRCRAFT PROBE — can the player actually FLY the aeroplane with the keys the
+ * AIRCRAFT PROBE — can the player actually FLY the airplane with the keys the
  * pause screen names, through the REAL input path?
  *
  *   npm run build && node src/ui/aircraftprobe.mjs
@@ -11,7 +11,7 @@
  * ---------------------------------------------------------------------------
  * WHY THIS EXISTS, AND WHY `flightprobe` IS NOT ENOUGH (RULE 12)
  * ---------------------------------------------------------------------------
- * `src/vehicles/flightprobe.mjs` is green and it flies the aeroplane
+ * `src/vehicles/flightprobe.mjs` is green and it flies the airplane
  * beautifully — because it writes `v.input.boost = 1` STRAIGHT ONTO THE
  * VEHICLE, at the `Vehicle.fixedStep` layer, bypassing everything between the
  * keyboard and the wing. That proves the aerodynamic model, and nothing about
@@ -26,7 +26,7 @@
  * actually reaches. Never `input`, never the lever, never a commanded rate.
  *
  * WHAT IT NAILS DOWN, all on emitted motion:
- *   - SUSTAINED, CONTROLLED CLIMB, EVERY aeroplane. Build speed on SHIFT, then
+ *   - SUSTAINED, CONTROLLED CLIMB, EVERY airplane. Build speed on SHIFT, then
  *     HOLD SHIFT + S for a FULL 20 s and gate FIVE things at once, because the
  *     prior gate held S for only 9-12 s and passed on "a rising run + gear up",
  *     which STOPPED BEFORE the over-the-top and the crash and so green-lit
@@ -50,7 +50,7 @@
  *     turn red — which is what proves the check measures the sign and is not
  *     just agreeing with whatever the code does.
  *     The climb gate is parametrized over the Skylark, the Slipstream and the
- *     two NEW aeroplanes (the Grizzly bush STOL and the Meridian twin), each
+ *     two NEW airplanes (the Grizzly bush STOL and the Meridian twin), each
  *     spawned on a real runway — every plane flies on the same keys.
  *   - THE ROSTER. The cheat menu's own EMITTED spawn rows are read out of the
  *     live document and asserted to contain every flyable — heli, newsheli,
@@ -139,6 +139,46 @@ const readPlane = () => run(`
     airborneT: +(v.airborne ?? 0).toFixed(2),
     inVehicle: player.inVehicle === true,
     phase: player.vehicles?.phase ?? null,
+  };`);
+
+/**
+ * The EMITTED exhaust-flame node — its length in metres, whether it is lit, and
+ * the actual mesh scale/visibility read straight off `plane.js`'s child mesh.
+ * Never a control: `exhaustLen` is the drawn plume length the throttle produced.
+ */
+const readFlame = () => run(`
+  const v = window.__PLANE__;
+  if (!v) return null;
+  const fl = v._exhaust || null;
+  return {
+    len: +(v.exhaustLen ?? 0).toFixed(3),
+    lit: v.exhaustLit ?? 0,
+    hasNode: !!fl,
+    visible: fl ? !!fl.visible : false,
+    scaleZ: fl ? +fl.scale.z.toFixed(3) : 0,
+    scaleR: fl ? +fl.scale.x.toFixed(3) : 0,
+    ab: +(v.afterburner ?? 0).toFixed(3),
+    lever: +(v.throttleLever ?? 0).toFixed(3),
+    jet: !!v._exhaustJet,
+  };`);
+
+/**
+ * Emitted position plus the body's nose axis and the signed body-forward speed,
+ * for the reverse-taxi check: displacement dotted with the nose is + forward,
+ * - aft, so "moves BACKWARD" is a claim about the real emitted position.
+ */
+const readPos = () => run(`
+  const v = window.__PLANE__;
+  if (!v) return null;
+  const q = v.quaternion;
+  const fx = 2*(q.x*q.z + q.w*q.y), fz = 1-2*(q.x*q.x + q.y*q.y);
+  return {
+    x: +v.position.x.toFixed(3), z: +v.position.z.toFixed(3),
+    fwdx: fx, fwdz: fz,
+    grounded: v.grounded,
+    speed: +v.speed.toFixed(2),
+    fwdSpeed: +(v.velocity.x*fx + v.velocity.z*fz).toFixed(3),
+    alt: +(v.altitude ?? 0).toFixed(2),
   };`);
 
 /**
@@ -271,7 +311,7 @@ try {
   await pump(8);
 
   /* ================================================================= */
-  area = '1 the aeroplane is boardable on a real runway';
+  area = '1 the airplane is boardable on a real runway';
   /* ================================================================= */
   const setup = await boardAtRunway('plane');
   await pump(180);
@@ -281,9 +321,9 @@ try {
     setup.err ? `SETUP FAILED: ${setup.err}` : `${setup.field} (${setup.runway} m) @ ${setup.x},${setup.z} · phase ${seated?.phase}`);
 
   /* ================================================================= */
-  area = '2 SHIFT then S — a SUSTAINED, CONTROLLED climb, EVERY aeroplane';
+  area = '2 SHIFT then S — a SUSTAINED, CONTROLLED climb, EVERY airplane';
   /* ================================================================= */
-  // The load-bearing rewrite. For each of the four aeroplanes: build flying
+  // The load-bearing rewrite. For each of the four airplanes: build flying
   // speed on SHIFT, then HOLD SHIFT + S (the panel's "pull back — nose up") for
   // a FULL 20 s and gate the five ways the old 9-12 s window let a broken climb
   // through — because it stopped BEFORE the over-the-top and the crash. Every
@@ -416,25 +456,69 @@ try {
   const bankA = aS?.bank ?? 0;
   let dHA = (aS?.heading ?? 0) - hA0; if (dHA > 180) dHA -= 360; else if (dHA < -180) dHA += 360;
 
-  // Convention: right wing drops => bank < 0 (see plane.js / flightprobe).
-  rec('D (panel: roll) drops the RIGHT wing and swings the heading right',
-    bankD < -10 && dHD > 3,
+  // THE PLAYER-SIDE SWAP (plane.js `if (v.autoReverse) ail = -ail`). The player
+  // reported the roll as inverted and wants D to bank the SAME way the heli does
+  // (D = left). So for a HUMAN pilot D now drops the LEFT wing and swings the
+  // heading LEFT; A mirrors it. Convention: right wing drops => bank < 0, left
+  // wing drops => bank > 0 (see plane.js / flightprobe).
+  rec('D (panel: roll) drops the LEFT wing and swings the heading left (the swapped, un-inverted direction)',
+    bankD > 10 && dHD < -3,
     `bank ${bankD.toFixed(1)} deg, heading ${dHD > 0 ? '+' : ''}${dHD.toFixed(1)} deg`);
-  rec('A drops the LEFT wing and swings the heading left (opposite of D)',
-    bankA > 10 && dHA < -3,
+  rec('A drops the RIGHT wing and swings the heading right (opposite of D)',
+    bankA < -10 && dHA > 3,
     `bank ${bankA.toFixed(1)} deg, heading ${dHA.toFixed(1)} deg`);
   rec('the banked turn stays coordinated (sideslip bounded, not reversed)',
     Math.abs(slipD) < 25,
-    `sideslip ${slipD.toFixed(1)} deg during the right turn`);
+    `sideslip ${slipD.toFixed(1)} deg during the left turn`);
 
-  // NEGATIVE CONTROL: flip the roll sign. Now D must drop the LEFT wing.
+  // NEGATIVE CONTROL: flip the roll sign on the LIVE plane. With debugFlipRoll
+  // in, D must go back to dropping the RIGHT wing — the same assertion above must
+  // turn red, which proves it measures the emitted sign and is not decorative.
   await holdFor(['ShiftLeft'], 2.5, 2.5);
   await setFlip(false, true);
   const dFlip = (await holdFor(['ShiftLeft', 'KeyD'], 1.3, 1.3))[0];
   await setFlip(false, false);
-  rec('NEG CONTROL — with debugFlipRoll, D now drops the LEFT wing (would go red)',
-    (dFlip?.bank ?? 0) > 8,
+  rec('NEG CONTROL — with debugFlipRoll, D drops the RIGHT wing again (would go red)',
+    (dFlip?.bank ?? 0) < -8,
     `flipped: bank ${(dFlip?.bank ?? 0).toFixed(1)} deg on D`);
+
+  // AND: the swap is scoped to the LOCAL PLAYER (the DRIVER), not to
+  // `autoReverse` — jetchase's interceptors set `autoReverse = true` too, so
+  // keying off it would invert their roll and fly them off the chase. Proven on
+  // the EMITTED aileron (plane.js publishes `v._ailOut`, the aileron actually
+  // flown after the swap) through the REAL model. Hold D and read what the plane
+  // flies as a PLAYER (driver.isPlayer); then swap the DRIVER to a jetchase-shaped
+  // NPC pilot (`{ npc:true, pilot:true }`) on the same live, still-flying model
+  // — the exact interceptor condition — keep D held, step, and read again. The
+  // player path must be SWAPPED (ail same sign as control.steer, D rolls left);
+  // the AI path must be UNCHANGED (ail = -control.steer, the old sign) even though
+  // autoReverse is identical — so airbaseprobe's AI jet is byte-identical.
+  await page.keyboard.down('ShiftLeft');
+  await page.keyboard.down('KeyD');
+  await pump(48);
+  const plEmit = await run(`
+    const pl = window.__PLANE__; const d = pl && pl.driver;
+    return pl ? { isPlayer: d === 'player' || d?.isPlayer === true, cs: +(pl.control.steer ?? 0).toFixed(3), ail: +(pl._ailOut ?? 0).toFixed(3) } : null;`);
+  // Swap the driver to the AI condition on the same live plane; keep it flying.
+  await run(`const v = window.__PLANE__; v.__savedDriver = v.driver; v.driver = { npc: true, pilot: true }; return true;`);
+  await pump(40);
+  const aiEmit = await run(`
+    const pl = window.__PLANE__; const d = pl && pl.driver;
+    return pl ? { isPlayer: d === 'player' || d?.isPlayer === true, cs: +(pl.control.steer ?? 0).toFixed(3), ail: +(pl._ailOut ?? 0).toFixed(3) } : null;`);
+  await run(`const v = window.__PLANE__; v.driver = v.__savedDriver; delete v.__savedDriver; return true;`);   // restore the player
+  await page.keyboard.up('KeyD');
+  await page.keyboard.up('ShiftLeft');
+  await pump(6);
+  // Player under D: swapped -> ail SAME sign as control.steer, and D rolls left.
+  const plSwapped = plEmit && plEmit.isPlayer === true && Math.abs(plEmit.cs) > 0.05 &&
+    Math.sign(plEmit.ail) === Math.sign(plEmit.cs) && plEmit.ail < 0;
+  // AI (npc driver, autoReverse still true) under the same D: unswapped -> ail
+  // OPPOSITE sign to control.steer — byte-identical to the pre-swap AI.
+  const aiUnswapped = aiEmit && aiEmit.isPlayer === false && Math.abs(aiEmit.cs) > 0.05 &&
+    Math.sign(aiEmit.ail) === -Math.sign(aiEmit.cs);
+  rec('AI SCOPING — emitted aileron: the local PLAYER is swapped, a jetchase-shaped NPC pilot is NOT (airbaseprobe untouched)',
+    plSwapped && aiUnswapped,
+    `player D: control.steer ${plEmit?.cs} -> ail ${plEmit?.ail} (swapped, rolls left); npc pilot same D: control.steer ${aiEmit?.cs} -> ail ${aiEmit?.ail} (old sign, unswapped)`);
 
   /* ================================================================= */
   area = '6 NON-INVERSION — nosewheel steering on the ground';
@@ -442,10 +526,11 @@ try {
   await boardAtRunway('plane');
   await pump(180);
   // A slow taxi where the plane stays firmly on all three wheels: brief throttle
-  // to get it creeping, then steer. D should swing the nose to the RIGHT
-  // (heading increases), matching the in-air roll convention's sense of "right".
-  // Sampled repeatedly and read on the last GROUNDED sample, so a bump that
-  // skips a wheel does not decide the axis.
+  // to get it creeping, then steer. After the PLAYER roll swap, D swings the nose
+  // to the LEFT (heading decreases) — matching the in-air bank direction, so
+  // ground and air agree on which way D turns the aircraft. Sampled repeatedly
+  // and read on the last GROUNDED sample, so a bump that skips a wheel does not
+  // decide the axis.
   await page.keyboard.down('ShiftLeft');
   await pump(90);                                    // ~1.5 s: a slow taxi
   await page.keyboard.up('ShiftLeft');
@@ -458,11 +543,135 @@ try {
   const grounded = gsamp.filter((s) => s && s.grounded >= 3);
   const useD = grounded.length ? grounded[grounded.length - 1] : gsamp[gsamp.length - 1];
   let dGD = (useD?.heading ?? 0) - (gBase?.heading ?? 0); if (dGD > 180) dGD -= 360; else if (dGD < -180) dGD += 360;
-  rec('on the ground D steers the nosewheel right (heading swings right)',
-    grounded.length >= 2 && dGD > 1.5,
+  rec('on the ground D steers the nosewheel left (heading swings left, matching the swapped bank)',
+    grounded.length >= 2 && dGD < -1.5,
     `heading ${dGD > 0 ? '+' : ''}${dGD.toFixed(1)} deg on D over ${grounded.length}/4 grounded samples`);
 
-  // Park it. Every aeroplane's take-off-and-climb is gated in depth in area 2.
+  // Park it. Every airplane's take-off-and-climb is gated in depth in area 2.
+  await run(`
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch(e){} }
+    return true;`);
+  await pump(20);
+
+  /* ================================================================= */
+  area = '6b EXHAUST FLAME — the plume scales with the throttle';
+  /* ================================================================= */
+  // The player asked for "fire coming out of the jet when the throttle is on so
+  // the user can tell if they need more throttle". Assert on the EMITTED flame
+  // node (plane.js's `_exhaust` child mesh + published `exhaustLen`): unlit at
+  // idle, clearly longer at full throttle, longer still with the jet's
+  // afterburner. NEGATIVE CONTROL: at zero throttle it is not lit.
+  await boardAtRunway('plane');
+  await pump(180);                                   // engine spools up
+  const flIdle = await readFlame();
+  rec('the plane builds a flame node parented to the body',
+    !!flIdle && flIdle.hasNode,
+    flIdle ? `node ${flIdle.hasNode}` : 'no flame reader');
+  rec('NEG CONTROL — at idle throttle the flame is unlit (~0 length, node hidden)',
+    flIdle && flIdle.lit === 0 && flIdle.scaleZ < 0.1 && !flIdle.visible,
+    flIdle ? `lit ${flIdle.lit}, scaleZ ${flIdle.scaleZ}, visible ${flIdle.visible}, lever ${flIdle.lever}` : 'null');
+  // Wind the throttle up on SHIFT and read the plume again.
+  await page.keyboard.down('ShiftLeft');
+  await pump(150);                                   // ~2.5 s: lever winds up
+  const flFull = await readFlame();
+  await page.keyboard.up('ShiftLeft');
+  rec('full throttle: the flame lights and is clearly longer than idle',
+    flFull && flFull.visible && flFull.scaleZ > 0.4 && flFull.len > flIdle.len + 0.4,
+    flFull ? `idle len ${flIdle.len} -> full len ${flFull.len} (scaleZ ${flFull.scaleZ}, lever ${flFull.lever})` : 'null');
+  // Wind it back to idle (SPACE) and confirm it unlights again.
+  await page.keyboard.down('Space');
+  await pump(180);
+  await page.keyboard.up('Space');
+  const flBack = await readFlame();
+  rec('winding the throttle back to idle unlights the flame again',
+    flBack && flBack.lit === 0 && !flBack.visible,
+    flBack ? `back to lever ${flBack.lever}, lit ${flBack.lit}, visible ${flBack.visible}` : 'null');
+  await run(`
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch(e){} }
+    return true;`);
+  await pump(20);
+
+  // THE JET — the afterburner plume is longer and brighter still. Board the jet,
+  // hold SHIFT to firewall the lever, and let the burner light; sample the flame
+  // when it is dry (partial) and again once the afterburner is up.
+  await boardAtRunway('jet');
+  await pump(150);
+  await page.keyboard.down('ShiftLeft');
+  let jetDry = null;
+  let jetAb = null;
+  for (let i = 0; i < 60; i++) {
+    await pump(20);
+    const f = await readFlame();
+    if (f && f.lever > 0.4 && f.ab < 0.2 && !jetDry) jetDry = f;
+    if (f && f.ab > 0.6) { jetAb = f; break; }
+  }
+  await page.keyboard.up('ShiftLeft');
+  rec('the jet lights its afterburner and the plume grows longest + brightest',
+    jetAb && jetAb.visible && jetAb.ab > 0.6 && jetAb.scaleZ > 3 &&
+      (!jetDry || jetAb.len > jetDry.len) && jetAb.len > (flFull?.len ?? 0),
+    jetAb ? `afterburner len ${jetAb.len} (dry ${jetDry ? jetDry.len : 'n/a'}, prop full ${flFull?.len}), ab ${jetAb.ab}, scaleZ ${jetAb.scaleZ}` : 'afterburner never lit');
+  await run(`
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch(e){} }
+    return true;`);
+  await pump(20);
+
+  /* ================================================================= */
+  area = '6c GROUND REVERSE TAXI — back off a wall, never in the air';
+  /* ================================================================= */
+  // A plane has no reverse gear; nosing into a wall trapped it. plane.js now
+  // drives a small bounded aft ground speed while a pilot holds SPACE on the
+  // ground with the lever closed. Assert the EMITTED position moves AFT (along
+  // -nose) and the aft speed stays bounded; and the AIRBORNE negative control:
+  // the same key never produces a reverse in the air.
+  await boardAtRunway('plane');
+  await pump(200);                                   // settle firmly on the gear
+  const p0 = await readPos();
+  await page.keyboard.down('Space');
+  const revSamples = [];
+  for (let i = 0; i < 8; i++) { await pump(30); revSamples.push(await readPos()); }
+  await page.keyboard.up('Space');
+  const p1 = revSamples[revSamples.length - 1];
+  const dx = (p1?.x ?? 0) - (p0?.x ?? 0);
+  const dz = (p1?.z ?? 0) - (p0?.z ?? 0);
+  // Displacement along the nose axis: + is forward, - is aft (backed up).
+  const alongDisp = dx * (p0?.fwdx ?? 0) + dz * (p0?.fwdz ?? 0);
+  const maxAftSpeed = Math.max(0, ...revSamples.map((s) => -Math.min(0, s?.fwdSpeed ?? 0)));
+  rec('grounded + SPACE: the plane moves BACKWARD (emitted position moves aft)',
+    alongDisp < -0.5 && (p1?.grounded ?? 0) > 0,
+    `along-nose displacement ${alongDisp.toFixed(2)} m (negative = aft), ${p1?.grounded} wheels down`);
+  rec('the reverse taxi self-limits to a slow pushback speed (bounded)',
+    maxAftSpeed > 0.2 && maxAftSpeed < 3.6,
+    `peak aft speed ${maxAftSpeed.toFixed(2)} m/s (cap ~2.6)`);
+  await run(`
+    if (player.inVehicle) player.vehicles.abort(player.movement);
+    if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch(e){} }
+    return true;`);
+  await pump(20);
+
+  // AIRBORNE NEGATIVE CONTROL: get airborne, then hold SPACE (the reverse key)
+  // WITH shift to stay flying, and confirm the body never drives aft.
+  await boardAtRunway('plane');
+  await pump(180);
+  await page.keyboard.down('ShiftLeft');
+  let airborne = null;
+  for (let i = 0; i < 50; i++) {
+    await pump(30);
+    const s = await readPos();
+    if (s && s.grounded === 0 && s.alt > 4) { airborne = s; break; }
+  }
+  await page.keyboard.down('Space');                 // the reverse key, in the air
+  const airSamples = [];
+  for (let i = 0; i < 8; i++) { await pump(30); airSamples.push(await readPos()); }
+  await page.keyboard.up('Space');
+  await page.keyboard.up('ShiftLeft');
+  const airborneAll = airSamples.length > 0 && airSamples.every((s) => s && s.grounded === 0);
+  const minFwd = airSamples.length ? Math.min(...airSamples.map((s) => s?.fwdSpeed ?? 0)) : -99;
+  rec('airborne + SPACE never produces a reverse (no aft ground drive in the air)',
+    !!airborne && airborneAll && minFwd > -0.2,
+    airborne ? `airborne throughout ${airborneAll}, min body-forward speed ${minFwd.toFixed(2)} m/s` : 'never got airborne');
   await run(`
     if (player.inVehicle) player.vehicles.abort(player.movement);
     if (window.__PLANE__) { try { veh.despawn(window.__PLANE__); } catch(e){} }
@@ -557,18 +766,18 @@ try {
   });
 
   const findGroup = (re) => panel.groups.find((g) => re.test(g.title));
-  const air = findGroup(/AEROPLANE|PLANE|AIRCRAFT/);
+  const air = findGroup(/AIRPLANE|PLANE|AIRCRAFT/);
   const heli = findGroup(/HELICOPTER|HELI/);
-  rec('an AEROPLANE control set is rendered on the pause screen',
+  rec('an AIRPLANE control set is rendered on the pause screen',
     !!air, air ? `"${air.title}" with ${air.rows.length} rows` : `groups: ${panel.groups.map((g) => g.title).join(', ')}`);
   const throttleRow = air?.rows.find((r) => r.keys.includes('SHIFT') && /THROTTLE|POWER|SPEED/.test(r.action.toUpperCase()));
-  rec('the AEROPLANE set names SHIFT as the throttle (not "climb")',
+  rec('the AIRPLANE set names SHIFT as the throttle (not "climb")',
     !!throttleRow, throttleRow ? `SHIFT -> "${throttleRow.action}"` : `SHIFT rows: ${(air?.rows ?? []).filter((r) => r.keys.includes('SHIFT')).map((r) => r.action).join(' | ') || 'none'}`);
   const pullRow = air?.rows.find((r) => r.keys.includes('S') && /UP|PULL|TAKE|NOSE/.test(r.action.toUpperCase()));
-  rec('the AEROPLANE set names S as pull-back / nose-up (how it rotates)',
+  rec('the AIRPLANE set names S as pull-back / nose-up (how it rotates)',
     !!pullRow, pullRow ? `S -> "${pullRow.action}"` : `S rows: ${(air?.rows ?? []).filter((r) => r.keys.includes('S')).map((r) => r.action).join(' | ') || 'none'}`);
   const pushRow = air?.rows.find((r) => r.keys.includes('W') && /DOWN|PUSH|NOSE/.test(r.action.toUpperCase()));
-  rec('the AEROPLANE set names W as push / nose-down (the opposite of S)',
+  rec('the AIRPLANE set names W as push / nose-down (the opposite of S)',
     !!pushRow, pushRow ? `W -> "${pushRow.action}"` : `W rows: ${(air?.rows ?? []).filter((r) => r.keys.includes('W')).map((r) => r.action).join(' | ') || 'none'}`);
   rec('a HELICOPTER control set is also rendered, kept separate',
     !!heli, heli ? `"${heli.title}" with ${heli.rows.length} rows` : `groups: ${panel.groups.map((g) => g.title).join(', ')}`);

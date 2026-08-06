@@ -335,6 +335,109 @@ function clamp(v, a, b) {
   return v < a ? a : v > b ? b : v;
 }
 
+/* ====================================================================== */
+/* Exhaust flame — a procedural throttle read-out                         */
+/* ====================================================================== */
+/**
+ * A stretched additive cone at the nozzle whose LENGTH and brightness track the
+ * throttle, so a player can gauge power at a glance ("do I need more throttle?").
+ * It is built at runtime as a child of the plane's BODY the first time the
+ * aircraft steps — which is why it lives here rather than in `buildPlaneBody`:
+ * the fighter jet is `kind: 'plane'` but is assembled by `jet.js`'s
+ * `buildJetBody`, and stepping through `stepPlane` is the ONE path both share,
+ * so both get the flame from one place.
+ *
+ * Cheap and leak-free by construction: ONE shared cone geometry and TWO shared
+ * materials (a warm dry plume, a hot blue-white afterburner plume) are created
+ * once for the whole program and reused by every aircraft — there is no
+ * per-plane GPU resource to dispose. The only per-step writes are the mesh's
+ * scale, visibility and material reference; nothing is allocated per frame.
+ */
+let _flameGeo = null;
+let _flameMatDry = null;
+let _flameMatAb = null;
+
+function flameGeo() {
+  if (_flameGeo) return _flameGeo;
+  // A unit cone re-based so it streams AFT: base (radius 1) at z = 0, apex at
+  // z = -1. Scaling z then stretches the plume out behind the nozzle.
+  const g = new THREE.ConeGeometry(1, 1, 10, 1, true);
+  g.translate(0, 0.5, 0);          // base at y = 0, apex at y = +1
+  g.rotateX(-Math.PI / 2);         // +Y -> -Z: base at z = 0, apex at z = -1
+  _flameGeo = g;
+  return g;
+}
+
+function flameMat(ab) {
+  if (ab) {
+    return (_flameMatAb = _flameMatAb || new THREE.MeshBasicMaterial({
+      color: 0x9fc6ff, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      side: THREE.DoubleSide,
+    }));
+  }
+  return (_flameMatDry = _flameMatDry || new THREE.MeshBasicMaterial({
+    color: 0xff7a26, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    side: THREE.DoubleSide,
+  }));
+}
+
+function syncExhaustFlame(v) {
+  const model = v.model;
+  const st = v.spec?.style;
+  if (!model || !model.bodyRoot || !st) return;
+
+  let fl = v._exhaust;
+  if (!fl) {
+    // Nozzle exit: the jet publishes `style.nozzle` ({ z, r, len }); a prop
+    // aircraft has none, so the plume sits at the tail of the fuselage. Parented
+    // to `bodyRoot` so it inherits the SAME -comY body frame the fuselage
+    // geometry is drawn in and lands exactly on the nozzle/tail.
+    const noz = st.nozzle;
+    const z = noz ? (noz.z - noz.len) : (st.fuseZ0 ?? -2);
+    const y = st.fuseY ?? 0;
+    fl = new THREE.Mesh(flameGeo(), flameMat(false));
+    fl.name = 'exhaustFlame';
+    fl.position.set(0, y, z);
+    fl.frustumCulled = false;
+    fl.renderOrder = 12;
+    fl.userData.owNoShadow = true;
+    fl.userData.owNoPrepass = true;   // a glow, never in the depth/normal prepass
+    fl.userData.owProbe = true;       // not level content — keep it out of "is the world empty?"
+    fl.visible = false;
+    model.bodyRoot.add(fl);
+    v._exhaust = fl;
+    v._exhaustJet = !!noz;
+    v._exhaustBaseR = noz ? noz.r * 0.92 : (st.fuseR ?? 0.5) * 0.55;
+  }
+
+  // Power read-out: the SPOOLED throttle (a cold engine winding up shows none,
+  // so the flame cannot be lit before the prop is turning), plus the jet's own
+  // long, bright, blue afterburner plume on top.
+  const dry = clamp((v.throttleLever ?? 0) * (v.rotorSpin ?? 0), 0, 1);
+  const ab = clamp(v.afterburner ?? 0, 0, 1);
+  const jet = v._exhaustJet;
+  const dryLen = jet ? 2.4 : 1.1;   // metres at full dry throttle
+  const abLen = jet ? 6.5 : 0;      // the afterburner's extra reach (jet only)
+  const len = dry * dryLen + ab * abLen;
+  const rad = v._exhaustBaseR * (0.55 + 0.45 * dry + 0.6 * ab);
+  const lit = len > 0.05;
+  // Always drive the scale so the node's scale.z is an honest read-out of the
+  // plume length — ~0 at idle, growing with throttle — rather than stale. When
+  // unlit the node is hidden anyway; a near-zero z keeps it degenerate/invisible.
+  fl.scale.set(rad, rad, Math.max(len, 1e-4));
+  fl.visible = lit;
+  // Published scalars, read by the aircraft gate (and available to fx/audio):
+  // the EMITTED plume length in metres and whether it is lit at all.
+  v.exhaustLen = len;
+  v.exhaustLit = lit ? 1 : 0;
+  if (lit) {
+    const mat = flameMat(ab > 0.15);
+    if (fl.material !== mat) fl.material = mat;
+  }
+}
+
 /**
  * One flight step. Accumulates into the Vehicle's force/torque exactly as the
  * wheel and hull models do, so the same integrator handles all of them.
@@ -473,13 +576,56 @@ export function stepPlane(v, dt, ctx) {
     v.addForce(_f);
   }
 
+  /* ---- 5b. ground reverse taxi (pushback) ----------------------------- */
+  // A plane has no reverse gear, so nosing into a wall traps it. When a pilot
+  // holds SPACE (throttle-down / brake) with the lever essentially closed, the
+  // aircraft ON THE GROUND and not already rolling forward, drive a small bounded
+  // aft speed — real pushback pace — so the player can back off a wall and
+  // re-line-up. Gated on `v.grounded` (0 while airborne), so it can NEVER engage
+  // in the air; gated on a near-closed lever and a low forward speed, so it can
+  // never fight a take-off roll (held on SHIFT) or a landing rollout (SPACE at
+  // speed still brakes normally, below).
+  const REV_MAX = 2.6;      // m/s — capped low: a slow back-taxi, not a getaway
+  const REV_ACC = 1.7;      // m/s^2 of aft push while below the cap
+  const reverseActive =
+    dnT > 0 && v.grounded > 0 && lever < 0.05 && _vb.z < 0.8;
+  if (reverseActive && _vb.z > -REV_MAX) {
+    // Proportional: full push when stopped (or creeping into a wall), fading to
+    // zero as the aft speed reaches the cap, so it self-limits at pushback pace.
+    const push = clamp((_vb.z + REV_MAX) / REV_MAX, 0, 1);
+    _f.copy(_fwd).multiplyScalar(-v.mass * REV_ACC * push);
+    v.addForce(_f);
+  }
+
+  /* ---- 5c. exhaust flame (a visual read-out of the throttle) ---------- */
+  syncExhaustFlame(v);
+
   /* ---- 6. control and stability moments ------------------------------ */
   // W/S elevator, A/D ailerons. `control` is filled by `fixedStep` for flight
   // kinds; `steer` already carries the auto-reverse sign a player driver is
-  // given (D -> control.steer < 0), so reading it — and negating once here —
-  // makes `ail > 0` mean "roll right" in both the game and the gate.
+  // given (D -> control.steer < 0). For AI, `ail = -control.steer` and `ail > 0`
+  // means "roll right" — unchanged. For a PLAYER (`v.autoReverse`) the roll swap
+  // below inverts that, so the human's D rolls LEFT to match the helicopter.
   let elev = clamp((v.control.throttle ?? 0) - (v.control.brake ?? 0), -1, 1);
   let ail = -clamp(v.control.steer ?? 0, -1, 1);
+  // PLAYER ROLL SWAP — LOCAL-HUMAN-ONLY, and deliberately scoped so every AI is
+  // byte-identical. A human at the wheel reported the roll as INVERTED and wants
+  // D to bank the plane the SAME way the helicopter does (D = left). `ail` above
+  // already carries the auto-reverse steer sign (D -> control.steer < 0 -> the
+  // OLD "roll right"), so flip it once more only for the LOCAL PLAYER.
+  //
+  // The discriminator is the DRIVER, NOT `v.autoReverse`: verified against
+  // `game/jetchase.js:166`, the interceptor pursuers ALSO set `autoReverse = true`
+  // (they were calibrated to the player's steer sign), so keying the swap off
+  // autoReverse would invert THEIR roll and fly them off the Ridgeline chase —
+  // exactly the regression airbaseprobe's [theft] checks catch. A real player is
+  // `driver === 'player'` or `driver.isPlayer === true` (the marker
+  // `vehicles/index.js:_isPlayerActor` uses); jetchase's `PILOT` is
+  // `{ npc: true, pilot: true }` and ambient AI planes carry an npc/absent
+  // driver, so none of them are swapped and their `ail` stays byte-identical. The
+  // jet is `kind: 'plane'` too: the PLAYER-flown jet flips, the AI-flown jet does not.
+  const d = v.driver;
+  if (d === 'player' || d?.isPlayer === true) ail = -ail;
   // NEGATIVE-CONTROL HOOKS. Off on every shipped path (undefined -> falsy); the
   // aircraft probe sets them on a LIVE plane to prove its non-inversion checks
   // actually measure the emitted sign. With a flip in, "press nose-up and the
@@ -487,6 +633,10 @@ export function stepPlane(v, dt, ctx) {
   // which is the whole point of a gate against inversion (ARCHITECTURE rule 12).
   if (v.debugFlipPitch) elev = -elev;
   if (v.debugFlipRoll) ail = -ail;
+  // The EMITTED aileron actually flown this step (after the player swap and any
+  // negative-control flip). Published so the aircraft gate can read the real sign
+  // off the model and prove the swap is player-scoped, rather than recompute it.
+  v._ailOut = ail;
 
   const wPitch = v.angularVelocity.dot(_right);
   const wRoll = v.angularVelocity.dot(_fwd);
@@ -613,8 +763,11 @@ export function stepPlane(v, dt, ctx) {
   const MAX_SPRING = 0.35;
   // SPACE brakes the wheels — the difference between a taxi roll and a stop on
   // landing. (The gear spring is vertical, so a parked plane does not creep on
-  // a slope regardless; there is no separate park brake to model.)
-  const braking = dnT > 0;
+  // a slope regardless; there is no separate park brake to model.) While the
+  // reverse taxi (5b) is engaged the wheels must ROLL — a braked wheel's
+  // longitudinal friction would exactly cancel the gentle pushback — so the
+  // brake is suppressed there; SPACE at any real forward speed still brakes.
+  const braking = dnT > 0 && !reverseActive;
   for (let i = 0; i < pts.length; i++) {
     _p.copy(pts[i]).applyQuaternion(q).add(v.position);
     const hit = phys.raycast(_p, _dir, maxRay, phys.MASK?.WORLD ?? 0);
