@@ -46,6 +46,7 @@
     "shirtcam": "node src/player/character/shirtcamprobe.mjs",
     "persist": "node src/game/persistprobe.mjs",
     "assault": "node src/game/airbaseprobe.mjs",
+    "assaultsurvive": "node src/game/airbasesurviveprobe.mjs",
     "copkill": "node src/game/copkillprobe.mjs",
     "seat": "node src/peds/seatprobe.mjs",
     "face": "node src/peds/faceprobe.mjs",

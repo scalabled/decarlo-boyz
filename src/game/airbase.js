@@ -65,18 +65,28 @@
  */
 
 import * as THREE from 'three';
-import { wrapAngle, dist, dist2, driveToward } from './util.js';
+import { wrapAngle, dist, dist2, driveToward, clamp01 } from './util.js';
 import { JetChase } from './jetchase.js';
 
 /** Concurrent armed guards. HOSTILE_MAX is 24 pool-wide; 8 leaves the story
- *  chapters their share even if one is somehow live at the same time. */
+ *  chapters their share even if one is somehow live at the same time. This is
+ *  the LATE-fight ceiling — the concurrent cap RAMPS from GUARD_CAP0 so the
+ *  first wave is a firefight, not a firing squad (see `_guardCap`). */
 const GUARD_CAP = 8;
+/** Concurrent guards the instant the base arms, and the seconds of engagement
+ *  it takes to reach the full GUARD_CAP. Fewer guns focused at once early. */
+const GUARD_CAP0 = 3;
+const GUARD_CAP_RAMP = 30;
 /** Guards per reinforcement wave, and seconds between waves. */
 const WAVE_SIZE = 3;
 const WAVE_PERIOD = 7;
-/** Rifle-class stand-off guard. `range` is the hostile brain's fire range. */
+/** Rifle-class stand-off guard. `range` is the hostile brain's fire range.
+ *  `dmg` was 8 (measured ~15-20 DPS across the first wave, lethal in ~6.5 s
+ *  with no accuracy/miss model in the shared hostile brain — every shot lands).
+ *  5 keeps a wave threatening while leaving the player a fighting chance to
+ *  break for a jet; lingering under the full ramp is still lethal. */
 const GUARD_OPTS = {
-  hp: 90, dmg: 8, ranged: true, range: 54, speed: 3.4, tag: 'airbase', leash: 140,
+  hp: 90, dmg: 5, ranged: true, range: 54, speed: 3.4, tag: 'airbase', leash: 140,
 };
 /** Guard spawn annulus around the player, m — in sight, not in his face. */
 const SPAWN_MIN = 28;
@@ -93,6 +103,25 @@ const FIRE_PERIOD = 4.2;
 const FIRE_JITTER = 1.8;
 /** Fire only once the emitted turret bears within this, rad. */
 const AIM_TOL = 0.06;
+
+/* ---- THE SPIN-UP, so the base does not open with instant lethal fire ---- */
+/** Seconds after the wire is crossed before the guns are fully lethal. The
+ *  klaxon sounds and the HUD warns immediately (the base is REACTING), guards
+ *  are still mustering and the turrets slew onto you — but the first wave holds
+ *  its fire and the main guns hold their shells until the base has "spun up".
+ *  A driven-in car gets these seconds to move before anything is thrown at it. */
+const GRACE_SPINUP = 3.5;
+/** RANGING IN. A 2100-point shell one-shots any car it lands on, so the
+ *  emplacements walk their fire onto a fresh target rather than dropping the
+ *  first round on its roof: the aim point starts BRACKET_MAX metres off and
+ *  closes to dead-on over BRACKET_RAMP seconds. Past the shell's damage reach
+ *  (radius x1.2 = 9 m) an off-target round only SHOVES the car — loud, close,
+ *  survivable — instead of wrecking it. Lingering lets the bracket collapse. */
+const BRACKET_MAX = 15;
+const BRACKET_RAMP = 13;
+/** Fewer guns at once: no two emplacements may loose a shell inside this
+ *  window, so a stolen or driven-in car never eats three simultaneous rounds. */
+const FIRE_STAGGER = 2.4;
 
 /** Seconds outside the wire before the base stands down. */
 const OUT_COOLDOWN = 12;
@@ -116,6 +145,27 @@ export function assaultDisabled() {
   return false;
 }
 
+/**
+ * NEGATIVE-CONTROL HATCH for the survivability tuning. `?assaulthard=1` /
+ * `OW_ASSAULT_HARD=1` reverts the playability work — no spin-up grace, no
+ * fire bracketing, no shell stagger, full guard damage, the whole garrison
+ * concurrent from the first frame — so `airbaseprobe` can prove the tuned
+ * arm actually keeps the player alive by watching the reverted arm kill him
+ * fast. It does NOT change the vehicle specs or the encounter's structure;
+ * it only flips the difficulty knobs this module owns back to their old,
+ * unsurvivable values.
+ */
+export function assaultHard() {
+  try {
+    if (typeof location !== 'undefined' &&
+      new URLSearchParams(location.search).get('assaulthard') === '1') return true;
+  } catch { /* no location */ }
+  try {
+    if (typeof process !== 'undefined' && process?.env?.OW_ASSAULT_HARD === '1') return true;
+  } catch { /* no process */ }
+  return false;
+}
+
 export class AirbaseAssault {
   constructor(ctx, { wq, heat, hostiles }) {
     this.ctx = ctx;
@@ -124,6 +174,9 @@ export class AirbaseAssault {
     this.hostiles = hostiles;
     this.rng = ctx.rng.fork();
     this.disabled = assaultDisabled();
+    /** Survivability tuning on (false) / reverted to the old lethality (true).
+     *  The negative control for the playability gate — see `assaultHard`. */
+    this.hard = assaultHard();
 
     this.chase = new JetChase(ctx, wq, this.rng.fork());
 
@@ -144,10 +197,16 @@ export class AirbaseAssault {
     this._losT = 0;
     this._losBroken = false;
     this._jeepsStopped = true;
+    /** Seconds this engagement has been armed — drives the spin-up grace, the
+     *  guard concurrency ramp and the fire bracket. Reset on every arm. */
+    this._armT = 0;
+    /** Shared cooldown so no two emplacements fire inside FIRE_STAGGER. */
+    this._fireLockT = 0;
 
     /* ---- scratch: nothing in update() allocates ---- */
     this._v = new THREE.Vector3();
     this._aim = new THREE.Vector3();
+    this._aim2 = new THREE.Vector3();
     this._muz = new THREE.Vector3();
     this._dir = new THREE.Vector3();
     this._alarmAt = new THREE.Vector3();
@@ -180,7 +239,10 @@ export class AirbaseAssault {
     return {
       on: !!this.ab,
       disabled: this.disabled,
+      hard: this.hard,
       armed: this.armed,
+      armT: +this._armT.toFixed(2),
+      guardCap: this._guardCap(),
       guards: this.guardCount,
       tanks: this.tanks.length,
       jets: this.jets.length,
@@ -190,6 +252,21 @@ export class AirbaseAssault {
       pursuers: this.chase.count,
       outT: +this._outT.toFixed(2),
     };
+  }
+
+  /** Concurrent guard ceiling RIGHT NOW — ramps from GUARD_CAP0 to GUARD_CAP
+   *  over GUARD_CAP_RAMP seconds of engagement, so the first wave is a
+   *  firefight and lingering brings the whole garrison. Full cap under `hard`. */
+  _guardCap() {
+    if (this.hard) return GUARD_CAP;
+    const t = Math.max(0, this._armT);
+    return Math.min(GUARD_CAP,
+      GUARD_CAP0 + Math.floor((GUARD_CAP - GUARD_CAP0) * (t / GUARD_CAP_RAMP)));
+  }
+
+  /** Seconds of spin-up before the guns are lethal — zero under `hard`. */
+  _grace() {
+    return this.hard ? 0 : GRACE_SPINUP;
   }
 
   /* ================================================================== */
@@ -221,6 +298,12 @@ export class AirbaseAssault {
     if (!this.disabled && inside && !this.armed && playerAlive) this._arm(px, pz);
 
     if (this.armed) {
+      // The engagement clock — the spin-up grace, the guard ramp and the fire
+      // bracket all read it. It advances only while the fight is joined (the
+      // player inside the wire), so ducking out and back does not re-spin a
+      // base that already came fully to life.
+      if (inside) this._armT += dt;
+      if (this._fireLockT > 0) this._fireLockT -= dt;
       this._cooldown(dt, inside, px, pz);
       this._alarm(dt, inside, px, pz);
       this._waves(dt, inside, px, pz);
@@ -238,10 +321,18 @@ export class AirbaseAssault {
   _arm(px, pz) {
     this.armed = true;
     this._outT = 0;
-    this._waveT = 0;   // first wave immediately
+    this._armT = 0;
+    this._fireLockT = 0;
+    // The klaxon and the HUD warning fire IMMEDIATELY (the base reacts the
+    // instant the wire is crossed) — but the first wave and the first shells
+    // hold until the spin-up grace has elapsed, so the crossing itself is not
+    // an instant crossfire.
+    this._waveT = this._grace();  // first wave after the spin-up
     this._alarmT = 0;  // klaxon immediately
     this._warnT = 0;   // warning immediately
-    for (const t of this.tanks) t.fireT = 1.6 + this.rng.float() * FIRE_JITTER;
+    for (const t of this.tanks) {
+      t.fireT = this._grace() + 0.6 + this.rng.float() * FIRE_JITTER;
+    }
     this._jeepsStopped = false;
     // The trespass, priced by the police's own table (see the header).
     this.heat?.report?.('trespass', this.wq.focusPos(), 1);
@@ -250,6 +341,8 @@ export class AirbaseAssault {
   _disarm() {
     this.armed = false;
     this._outT = 0;
+    this._armT = 0;
+    this._fireLockT = 0;
     // Guards stand down: through the pool's despawn chokepoint.
     for (let i = this.guards.length - 1; i >= 0; i--) this.hostiles?.despawn?.(this.guards[i]);
     this.guards.length = 0;
@@ -353,7 +446,7 @@ export class AirbaseAssault {
     if (this._waveT > 0 || !inside) return;
     this._waveT = WAVE_PERIOD;
     const alive = this.guardCount;
-    const want = Math.min(WAVE_SIZE, GUARD_CAP - alive);
+    const want = Math.min(WAVE_SIZE, this._guardCap() - alive);
     if (want <= 0) return;
 
     // Muster points: the published patrol loop plus the gate posts, inside
@@ -398,6 +491,11 @@ export class AirbaseAssault {
     if (!this.tanks.length) return;
     const playerVeh = this.wq.playerVehicle();
     this._aim.set(px, py + 1.0, pz);
+    // The ranging bracket: metres the aim point is deliberately thrown off,
+    // large at first crossing and closing to zero over BRACKET_RAMP seconds.
+    const bracket = this.hard ? 0
+      : BRACKET_MAX * clamp01(1 - this._armT / BRACKET_RAMP);
+    const graced = this._armT >= this._grace();
     for (const t of this.tanks) {
       const v = t.v;
       if (!v || v.destroyed) continue;
@@ -406,19 +504,31 @@ export class AirbaseAssault {
       const d = dist(v.position.x, v.position.z, px, pz);
       if (d > TANK_RANGE * 1.4) { v.turretAimActive = false; continue; }
 
+      // Where THIS gun is laid: the player, offset by its own bracket vector.
+      // Each emplacement brackets from a different quarter (t.bx/t.bz), so the
+      // early rounds straddle the target rather than stacking on one spot.
+      this._aim2.set(this._aim.x + t.bx * bracket, this._aim.y,
+        this._aim.z + t.bz * bracket);
+
       // Track: the production stepTurret slews the emitted turret from here,
       // above the sleep gate, at the spec's bounded rates.
-      v.aimTurret?.(this._aim);
+      v.aimTurret?.(this._aim2);
 
-      // Fire control: cadence, envelope, hold-fire under a live chase, LOS,
-      // and only once the EMITTED turret actually bears.
+      // Fire control: the spin-up grace, the shared shell stagger, cadence,
+      // envelope, hold-fire under a live chase, LOS, and only once the EMITTED
+      // turret actually bears on its (bracketed) aim point.
       t.fireT -= dt;
       if (t.fireT > 0) continue;
+      if (!graced) continue;                           // base still spinning up
+      if (this._fireLockT > 0) continue;               // another gun just fired
       if (this.chase.active) continue;                 // interceptors own it
       if (d < TANK_MIN || d > TANK_RANGE) continue;
-      if (!this._turretOnTarget(v)) continue;
+      if (!this._turretOnTarget(v, this._aim2)) continue;
       if (!this._tankSees(v, px, py, pz, d)) continue;
-      if (v.fireShell?.() ?? null) t.fireT = FIRE_PERIOD + this.rng.float() * FIRE_JITTER;
+      if (v.fireShell?.() ?? null) {
+        t.fireT = FIRE_PERIOD + this.rng.float() * FIRE_JITTER;
+        this._fireLockT = this.hard ? 0 : FIRE_STAGGER;
+      }
     }
   }
 
@@ -427,12 +537,12 @@ export class AirbaseAssault {
    * yaw the slew solves, compared against the PUBLISHED `turretYaw` state
    * that `syncTransforms` draws.
    */
-  _turretOnTarget(v) {
+  _turretOnTarget(v, aim = this._aim) {
     const st = v.spec?.style;
     if (!st?.turret) return false;
     this._muz.set(st.turret.x ?? 0, st.turret.y + (st.gun?.y ?? 0.3) - v.spec.comY, st.turret.z)
       .applyQuaternion(v.quaternion).add(v.position);
-    this._dir.copy(this._aim).sub(this._muz)
+    this._dir.copy(aim).sub(this._muz)
       .applyQuaternion(this._q.copy(v.quaternion).invert());
     const wantYaw = Math.atan2(this._dir.x, this._dir.z);
     return Math.abs(wrapAngle(wantYaw - (v.turretYaw ?? 0))) < AIM_TOL;
@@ -534,7 +644,13 @@ export class AirbaseAssault {
         if (v) { this.jets.push(v); jets++; }
       } else if (slot.kind === 'tank' && tanks < TANK_N) {
         const v = at(slot, 'tank');
-        if (v) { this.tanks.push({ v, fireT: 2 }); tanks++; }
+        if (v) {
+          // A fixed bracket bearing per gun, so the ranging rounds straddle the
+          // target from different quarters instead of stacking on one point.
+          const a = this.rng.range(-Math.PI, Math.PI);
+          this.tanks.push({ v, fireT: 2, bx: Math.sin(a), bz: Math.cos(a) });
+          tanks++;
+        }
       } else if (slot.kind === 'jeep' && jeeps < JEEP_N) {
         const v = at(slot, 'suv', JEEP_OPTS);
         if (v) { this.jeeps.push(v); jeeps++; }
