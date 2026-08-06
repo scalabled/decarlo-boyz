@@ -207,6 +207,13 @@ export class PlayerSystem {
     this.debugBlastInVehicle = true;
     /** false = a melee weapon may drive the ADS zoom and the aim pose again. */
     this.debugMeleeAimGate = true;
+    /**
+     * false = the NEGATIVE CONTROL for the aircraft-body hide: the player's own
+     * character mesh is NOT hidden while riding a plane/heli, so it clips out of
+     * the canopy again — the build the report describes. `src/player/aircraftbodyprobe.mjs`
+     * flips this on the LIVE player to prove the hide is what removes the body.
+     */
+    this.debugHideInAircraft = true;
 
     /* ---- water / death ---- */
     this._drownTick = 0;
@@ -790,6 +797,22 @@ export class PlayerSystem {
       this.character.setOpacity(0);
       return;
     }
+    /**
+     * HIDE THE PLAYER'S OWN BODY IN AN AIRCRAFT. The seated pose is authored for
+     * a CAR cabin — meant to read through the windows — and it does not fit a
+     * plane/jet cockpit or a heli bubble: the body clips out of the fuselage and
+     * canopy. Cars, bikes and boats keep the seated driver (only aircraft are
+     * hidden). This restores itself the moment the seat is left, because
+     * `_inAircraft` reads the live vehicle handler — `seated` and the vehicle
+     * both drop on exit, on a direct vehicle-to-vehicle switch and on a bail.
+     * Nothing else is touched: the capsule is already out of the world while
+     * driving, `_head` (above) drives every line-of-sight / aim / HUD anchor off
+     * `movement.renderPosition`, and the seat anchor lives in `vehicle.js`.
+     */
+    if (this.debugHideInAircraft !== false && this._inAircraft()) {
+      this.character.setOpacity(0);
+      return;
+    }
     const cam = this.controlEnabled && !this._suppressCamera
       ? this.rig.position : this.ctx.camera.position;
     const d = cam.distanceTo(this._head);
@@ -797,6 +820,20 @@ export class PlayerSystem {
     const target = clamp01((d - C.fadeEnd) / (C.fadeStart - C.fadeEnd));
     this._fade = approach(this._fade ?? 1, target, 0.05, dt);
     this.character.setOpacity(this._fade);
+  }
+
+  /**
+   * True while the player is aboard a flying machine (a plane/jet or a heli),
+   * from the moment he is in the seat until he leaves it. Duck-typed off the
+   * vehicle handler so `vehicles` can evolve its spec: `seated` covers the
+   * settle-in and drive phases, and `kind` is the same tag `vehicle.js` reads to
+   * route flight input (`v.spec?.kind === 'plane' || 'heli'`).
+   */
+  _inAircraft() {
+    const vh = this.vehicles;
+    if (!vh || !vh.seated) return false;
+    const kind = vh.vehicle?.spec?.kind;
+    return kind === 'plane' || kind === 'heli';
   }
 
   _syncHitbox() {
